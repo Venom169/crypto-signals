@@ -1,0 +1,692 @@
+//@version=5
+// N🤖R — نسخة دورة 60 دقيقة · إعدادات فريم 3دق و 5دق فقط
+// منطق: لمس PDH من الأسفل N مرات → لونغ | لمس PDL من الأعلى N مرات → شورت. صفقة واحدة مفتوحة في كل وقت.
+// الأهداف (TP/SL) تُحسب كنسبة مئوية (%) من سعر الدخول بدل مبلغ دولار ثابت.
+// ملاحظة: أي فريم غير 3دق يستخدم إعدادات مجموعة 5دق.
+indicator(" N🤖R+15", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ═══════════════════════════════════════════════
+// إعدادات الفريم
+// ═══════════════════════════════════════════════
+cyc_tt = "دورة PDH/PDL: عند انقلاب هذه الفترة تُحدَّث الخطوط ويُعاد عدّ اللمسات."
+fc_tt  = "⏰ ستوب زمني: يُغلق الصفقة بعد عدد شموع محدد من شمعة الدخول."
+cnf_tt = "شمعة التأكيد: للصفقة الشرائية تُشترط شمعة صاعدة بجسم قوي وفتيل علوي صغير، وللبيعية العكس."
+pct_tt = "نسبة مئوية من سعر الدخول. مثال: الذهب عند 3300 → 0.15% ≈ 4.95$."
+
+sl_3min  = input.float(0.15, "Stop Loss % (من سعر الدخول)", step=0.01, minval=0.001, tooltip=pct_tt, group="⏱ فريم 3دق")
+tp_3min  = input.float(0.15, "TP 1 % (من سعر الدخول)",      step=0.01, minval=0.001, tooltip=pct_tt, group="⏱ فريم 3دق")
+cyc_3min = input.string("60", "فترة الدورة", options=["15", "30", "60", "120", "240", "480", "720", "D"], tooltip=cyc_tt, group="⏱ فريم 3دق")
+touch_3min = input.int(2, "عدد اللمسات N", minval=1, maxval=99, group="⏱ فريم 3دق")
+tol_3min = input.float(0.10, "تسامح اللمس ($)", step=0.01, minval=0.0, group="⏱ فريم 3دق")
+cnf_en_3min   = input.bool(false, "🕯 فلتر شمعة التأكيد", tooltip=cnf_tt, group="⏱ فريم 3دق")
+cnf_body_3min = input.float(0.5, "🕯 أدنى نسبة الجسم", minval=0.1, maxval=0.9, step=0.05, group="⏱ فريم 3دق")
+cnf_wick_3min = input.float(0.5, "🕯 أقصى نسبة الفتيل المعاكس", minval=0.1, maxval=0.9, step=0.05, group="⏱ فريم 3دق")
+vol_en_3min   = input.bool(false, "📊 فلتر Volume Spike", group="⏱ فريم 3دق")
+vol_len_3min  = input.int(20, "📊 Volume SMA Length", minval=1, group="⏱ فريم 3دق")
+vol_mult_3min = input.float(1.5, "📊 Volume Multiplier", minval=0.1, step=0.1, group="⏱ فريم 3دق")
+fc_en_3min    = input.bool(false, "⏰ ستوب زمني", tooltip=fc_tt, group="⏱ فريم 3دق")
+fc_bars_3min  = input.int(40, "⏰ عدد الشموع قبل الإغلاق", minval=1, group="⏱ فريم 3دق")
+
+sl_5min  = input.float(0.15, "Stop Loss % (من سعر الدخول)", step=0.01, minval=0.001, tooltip=pct_tt, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
+tp_5min  = input.float(0.15, "TP 1 % (من سعر الدخول)",      step=0.01, minval=0.001, tooltip=pct_tt, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
+cyc_5min = input.string("60", "فترة الدورة", options=["15", "30", "60", "120", "240", "480", "720", "D"], tooltip=cyc_tt, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
+touch_5min = input.int(2, "عدد اللمسات N", minval=1, maxval=99, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
+tol_5min = input.float(0.10, "تسامح اللمس ($)", step=0.01, minval=0.0, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
+cnf_en_5min   = input.bool(false, "🕯 فلتر شمعة التأكيد", tooltip=cnf_tt, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
+cnf_body_5min = input.float(0.5, "🕯 أدنى نسبة الجسم", minval=0.1, maxval=0.9, step=0.05, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
+cnf_wick_5min = input.float(0.5, "🕯 أقصى نسبة الفتيل المعاكس", minval=0.1, maxval=0.9, step=0.05, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
+vol_en_5min   = input.bool(false, "📊 فلتر Volume Spike", group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
+vol_len_5min  = input.int(20, "📊 Volume SMA Length", minval=1, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
+vol_mult_5min = input.float(1.5, "📊 Volume Multiplier", minval=0.1, step=0.1, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
+fc_en_5min    = input.bool(false, "⏰ ستوب زمني", tooltip=fc_tt, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
+fc_bars_5min  = input.int(24, "⏰ عدد الشموع قبل الإغلاق", minval=1, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
+
+string chart_tf = timeframe.period
+bool   is_tf3   = chart_tf == "3"
+
+float  sl_fixed_pct          = is_tf3 ? sl_3min : sl_5min
+float  tp_fixed_pct          = is_tf3 ? tp_3min : tp_5min
+string cycle_tf              = is_tf3 ? cyc_3min : cyc_5min
+int    touch_required        = is_tf3 ? touch_3min : touch_5min
+float  touch_tol_usd         = is_tf3 ? tol_3min : tol_5min
+bool   enable_confirm_filter = is_tf3 ? cnf_en_3min : cnf_en_5min
+float  confirm_min_body_ratio= is_tf3 ? cnf_body_3min : cnf_body_5min
+float  confirm_max_wick_ratio= is_tf3 ? cnf_wick_3min : cnf_wick_5min
+bool   enable_volume_filter  = is_tf3 ? vol_en_3min : vol_en_5min
+int    volumeLength          = is_tf3 ? vol_len_3min : vol_len_5min
+float  volumeMultiplier      = is_tf3 ? vol_mult_3min : vol_mult_5min
+bool   enable_time_stop      = is_tf3 ? fc_en_3min : fc_en_5min
+int    time_stop_bars        = is_tf3 ? fc_bars_3min : fc_bars_5min
+
+// ═══════════════════════════════════════════════
+// سلوك الصفقة عند لفّ الدورة
+// ═══════════════════════════════════════════════
+keep_tt = "مفعّل: عند انقلاب الدورة تُحدَّث خطوط PDH/PDL ويُعاد عدّ اللمسات، لكن الصفقة المفتوحة تبقى حتى TP أو SL. مطفأ: تُغلق الصفقة بسعر إغلاق الدورة."
+keep_trade_on_cycle = input.bool(true, "🔁 إبقاء الصفقة مفتوحة عبر لفّ الدورة", tooltip=keep_tt, group="⚙️ إعدادات الدخول")
+trade_direction = input.string("الكل (شراء وبيع)", "↕️ نوع الصفقات المسموحة", options=["الكل (شراء وبيع)", "فقط شراء", "فقط بيع"], group="⚙️ إعدادات الدخول")
+touch_style = input.string("لمسة منفصلة", "طريقة العد", options=["لمسة منفصلة", "كل شمعة تلمس"],
+     tooltip="لمسة منفصلة: تُحتسب أول لمسة فقط بعد مغادرة الخط ثم العودة إليه. كل شمعة تلمس: تُحتسب كل شمعة تلامس الخط.",
+     group="⚙️ إعدادات الدخول")
+
+// ═══════════════════════════════════════════════
+// حجم TP/SL (بالنسبة المئوية)
+// ═══════════════════════════════════════════════
+size_tt = "نسبة مئوية ثابتة: TP/SL = سعر الدخول × النسبة% (من إعدادات الفريم). نسبة من مدى الدورة: مدى الدورة = PDH − PDL للفترة السابقة، مضروباً بالمعامل ومحصوراً بين أدنى وأقصى نسبة مئوية من سعر الدخول."
+sizing_mode   = input.string("نسبة مئوية ثابتة", "📏 طريقة حساب TP/SL", options=["نسبة مئوية ثابتة", "نسبة من مدى الدورة"], tooltip=size_tt, group="📏 حجم TP/SL")
+tp_range_mult = input.float(0.80, "🎯 معامل TP × مدى الدورة", minval=0.05, step=0.05, group="📏 حجم TP/SL")
+sl_range_mult = input.float(1.00, "🛑 معامل SL × مدى الدورة", minval=0.05, step=0.05, group="📏 حجم TP/SL")
+min_dist_pct  = input.float(0.05, "⬇️ أدنى مسافة مسموحة (%)", minval=0.001, step=0.01, group="📏 حجم TP/SL")
+max_dist_pct  = input.float(0.50, "⬆️ أقصى مسافة مسموحة (%)", minval=0.01, step=0.01, group="📏 حجم TP/SL")
+
+// ═══════════════════════════════════════════════
+// الجسر
+// ═══════════════════════════════════════════════
+pc_license = input.string("88518753323091", "🔑 License ID", group="🤖 الجسر / Bridge")
+pc_symbol  = input.string("XAUUSDm", "📊 Symbol", group="🤖 الجسر / Bridge")
+pc_lots    = input.float(0.02, "📦 حجم اللوت", step=0.01, minval=0.01, tooltip="يُرسل كـ vol_lots= — حجم ثابت بالعقود. 0.02 = 0.02 لوت، وليس 2% مخاطرة.", group="🤖 الجسر / Bridge")
+enable_bridge_close_alert = input.bool(true, "📤 تنبيه إغلاق للجسر (لفّ الدورة/ستوب زمني)", group="🤖 الجسر / Bridge")
+
+// ═══════════════════════════════════════════════
+// إحصائيات وعرض
+// ═══════════════════════════════════════════════
+start_date           = input.time(timestamp("01 Dec 2024 00:00 +0000"), "Start Date", group="📊 إحصائيات وعرض")
+manual_usd_per_price = input.float(2.0, "$ لكل 1.0 حركة سعر", step=0.01, minval=0.0000001, tooltip="على XAUUSD: اللوت × 100. مثال: 0.02 لوت = 2.0", group="📊 إحصائيات وعرض")
+trade_cost_usd       = input.float(0.0, "💰 تكلفة الصفقة $ (تُطرح من Net P/L)", step=0.5, group="📊 إحصائيات وعرض")
+enable_time_window   = input.bool(false, "⏱️ تفعيل وقت تداول مخصص", group="📊 إحصائيات وعرض")
+trade_start_hour     = input.int(8, "من ساعة", minval=0, maxval=23, group="📊 إحصائيات وعرض")
+trade_end_hour       = input.int(20, "إلى ساعة", minval=0, maxval=23, group="📊 إحصائيات وعرض")
+show_pdl_pdh         = input.bool(true, "👁 إظهار خطوط PDH/PDL", group="📊 إحصائيات وعرض")
+show_trade_history   = input.bool(true, "📜 إظهار جدول سجل الصفقات", group="📊 إحصائيات وعرض")
+th_table_position    = input.string("أسفل يمين", "📍 موضع جدول السجل", options=["أسفل يمين", "أسفل يسار", "أعلى يسار"], group="📊 إحصائيات وعرض")
+dashboard_size       = input.string("Small", "🔠 حجم نص الجداول", options=["Tiny","Small","Normal"], group="📊 إحصائيات وعرض")
+
+// ═══════════════════════════════════════════════
+// ألوان الجداول
+// ═══════════════════════════════════════════════
+tbl_bg_clr     = input.color(#1a1200, "🎨 لون خلفية الجداول", group="🎨 ألوان الجداول")
+tbl_bg_transp  = input.int(100, "🌫 شفافية الخلفية", minval=0, maxval=100, tooltip="100 = شفاف تماماً. نزّلها لـ 70–85 لخلفية ظاهرة.", group="🎨 ألوان الجداول")
+tbl_border_clr = input.color(color.rgb(218, 165, 32), "🖼 لون الإطار", group="🎨 ألوان الجداول")
+tbl_head_clr   = input.color(color.rgb(255, 223, 50), "🔤 لون العناوين", group="🎨 ألوان الجداول")
+tbl_label_clr  = input.color(color.rgb(212, 175, 55), "🏷 لون أسماء الصفوف", group="🎨 ألوان الجداول")
+tbl_pd_clr     = input.color(color.new(#ff82b2, 0), "📉 لون خطوط PDH/PDL", group="🎨 ألوان الجداول")
+
+// ═══════════════════════════════════════════════
+// ثوابت داخلية
+// ═══════════════════════════════════════════════
+int   th_rows_display = 10
+color pd_color        = tbl_pd_clr
+color dash_border     = tbl_border_clr
+
+bool allow_buy  = trade_direction == "الكل (شراء وبيع)" or trade_direction == "فقط شراء"
+bool allow_sell = trade_direction == "الكل (شراء وبيع)" or trade_direction == "فقط بيع"
+
+offset_val    = 10
+dash_size     = dashboard_size == "Tiny" ? size.tiny : dashboard_size == "Small" ? size.small : size.normal
+selected_size = dash_size
+in_date_range = time >= start_date
+touch_eps     = touch_tol_usd
+distinct_mode = touch_style == "لمسة منفصلة"
+use_range_sizing = sizing_mode == "نسبة من مدى الدورة"
+
+// فريم أصغر للتحقق من ترتيب لمس TP/SL داخل الشمعة
+string exit_ltf_res = timeframe.in_seconds(chart_tf) <= 60 ? "1S" : "1"
+ltf_high = request.security_lower_tf(syminfo.tickerid, exit_ltf_res, high)
+ltf_low  = request.security_lower_tf(syminfo.tickerid, exit_ltf_res, low)
+
+// Volume Spike Filter
+float avgVolume = ta.sma(volume, volumeLength)
+bool  volume_data_valid = not na(avgVolume) and avgVolume > 0
+bool  volumeSpikePassed = not enable_volume_filter or not volume_data_valid or (volume >= avgVolume * volumeMultiplier)
+
+// سجل الصفقات
+var int   locked_entry_time = na
+var array<int>    th_time   = array.new<int>()
+var array<string> th_side   = array.new<string>()
+var array<string> th_exit   = array.new<string>()
+var array<float>  th_net    = array.new<float>()
+
+// ═══════════════════════════════════════════════
+// رسائل الجسر — صيغة صريحة: vol_lots + sl_price + tp_price
+// ═══════════════════════════════════════════════
+f_pc_order(bool _is_buy, float _tp_price, float _sl_price) =>
+    pc_license + "," + (_is_buy ? "buy" : "sell") + "," + pc_symbol + ",vol_lots=" + str.tostring(pc_lots, "#.##") + ",sl_price=" + str.tostring(_sl_price, format.mintick) + ",tp_price=" + str.tostring(_tp_price, format.mintick)
+
+f_pc_close(bool _is_buy) =>
+    pc_license + "," + (_is_buy ? "closelong" : "closeshort") + "," + pc_symbol
+
+f_net(float _entry, float _exit, bool _is_buy) =>
+    float diff = _is_buy ? (_exit - _entry) : (_entry - _exit)
+    diff * manual_usd_per_price - trade_cost_usd
+
+// نسبة مئوية لمسافة سعرية من سعر الدخول
+f_pct(float _dist, float _entry) =>
+    _entry != 0 ? math.abs(_dist) / _entry * 100 : 0.0
+
+f_record_trade(int _t, bool _is_buy, string _exit_label, float _net) =>
+    array.unshift(th_time, _t)
+    array.unshift(th_side, _is_buy ? "BUY" : "SELL")
+    array.unshift(th_exit, _exit_label)
+    array.unshift(th_net, _net)
+    if array.size(th_time) > 10
+        array.pop(th_time)
+        array.pop(th_side)
+        array.pop(th_exit)
+        array.pop(th_net)
+
+f_is_bull_confirm(float _o, float _h, float _l, float _c, float _min_body, float _max_wick) =>
+    float rng = _h - _l
+    bool  ok  = false
+    if rng > 0
+        float body       = _c - _o
+        float upper_wick = _h - math.max(_o, _c)
+        ok := (_c > _o) and (body / rng >= _min_body) and (upper_wick / rng <= _max_wick)
+    ok
+
+f_is_bear_confirm(float _o, float _h, float _l, float _c, float _min_body, float _max_wick) =>
+    float rng = _h - _l
+    bool  ok  = false
+    if rng > 0
+        float body       = _o - _c
+        float lower_wick = math.min(_o, _c) - _l
+        ok := (_c < _o) and (body / rng >= _min_body) and (lower_wick / rng <= _max_wick)
+    ok
+
+f_drawLevels(float _tp1, float _sl, float _entry) =>
+    x2  = bar_index + offset_val
+    l1  = line.new(bar_index, _tp1, x2, _tp1, color=color.new(#0cb112, 40), width=1, style=line.style_dotted)
+    l2  = line.new(bar_index, _sl,  x2, _sl,  color=color.new(color.rgb(224,18,18), 40), width=1, style=line.style_dotted)
+    lb1 = label.new(x2, _tp1, "TP1: "+str.tostring(_tp1, format.mintick)+" (+"+str.tostring(f_pct(_tp1-_entry, _entry),"#.###")+"% · $"+str.tostring(math.abs(_tp1-_entry),"#.##")+")", color=#0cb112, textcolor=color.white, style=label.style_label_left, size=selected_size)
+    lb2 = label.new(x2, _sl,  "SL: " +str.tostring(_sl,  format.mintick)+" (-"+str.tostring(f_pct(_sl-_entry, _entry), "#.###")+"% · $"+str.tostring(math.abs(_sl-_entry), "#.##")+")", color=color.rgb(224,18,18), textcolor=color.white, style=label.style_label_left, size=selected_size)
+    [l1, l2, lb1, lb2]
+
+f_deleteLevels(line l1, line l2, label lb1, label lb2) =>
+    line.delete(l1)
+    line.delete(l2)
+    label.delete(lb1)
+    label.delete(lb2)
+
+f_extendLevels(line l1, line l2, label lb1, label lb2, int rx) =>
+    line.set_x2(l1, rx)
+    line.set_x2(l2, rx)
+    label.set_x(lb1, rx)
+    label.set_x(lb2, rx)
+
+f_pick_first_touch(float _tp, float _sl, bool _tp_hit, bool _sl_hit, bool _is_buy, array<float> _ltf_h, array<float> _ltf_l) =>
+    int picked = 0
+    if _tp_hit and _sl_hit
+        bool resolved = false
+        if not na(_ltf_h) and array.size(_ltf_h) > 0
+            for i = 0 to array.size(_ltf_h) - 1
+                float hh = array.get(_ltf_h, i)
+                float ll = array.get(_ltf_l, i)
+                bool tp_i = _is_buy ? hh >= _tp : ll <= _tp
+                bool sl_i = _is_buy ? ll <= _sl : hh >= _sl
+                if tp_i or sl_i
+                    picked := tp_i and sl_i ? 2 : tp_i ? 1 : 2
+                    resolved := true
+                    break
+        if not resolved
+            picked := 2
+    else if _tp_hit
+        picked := 1
+    else if _sl_hit
+        picked := 2
+    picked
+
+// ═══════════════════════════════════════════════
+// الحالة
+// ═══════════════════════════════════════════════
+var int   win_count = 0
+var int   lose_count = 0
+var float net_usd_total = 0.0
+var float win_usd_sum = 0.0
+var float lose_usd_sum = 0.0
+var int   cnt_tp = 0
+var int   cnt_sl = 0
+var int   cnt_fc = 0
+var int   cnt_cyc = 0
+var int   current_win_streak = 0
+var int   current_lose_streak = 0
+var int   longest_win_streak = 0
+var int   longest_lose_streak = 0
+var bool  last_trade_was_win = false
+var int   last_start_date = na
+
+var int  triggered_bar = na
+var bool entry_alert_sent = false
+var bool bridge_fc_close_sent = false
+varip int intrabar_exit_state = 0
+
+if na(last_start_date) or start_date != last_start_date
+    win_count := 0
+    lose_count := 0
+    net_usd_total := 0.0
+    win_usd_sum := 0.0
+    lose_usd_sum := 0.0
+    cnt_tp := 0
+    cnt_sl := 0
+    cnt_fc := 0
+    cnt_cyc := 0
+    current_win_streak := 0
+    current_lose_streak := 0
+    longest_win_streak := 0
+    longest_lose_streak := 0
+    last_start_date := start_date
+
+[d_h, d_l] = request.security(syminfo.tickerid, cycle_tf, [high[1], low[1]], lookahead=barmerge.lookahead_on)
+
+// المسافات بالنسبة المئوية من السعر الحالي (= سعر الدخول عند تحقق شرط الدخول، لأن الدخول على close)
+float ref_price    = close
+float cycle_range  = d_h - d_l
+float min_dist_px  = ref_price * min_dist_pct / 100
+float max_dist_px  = ref_price * max_dist_pct / 100
+float tp_dist = use_range_sizing ? math.min(math.max(cycle_range * tp_range_mult, min_dist_px), max_dist_px) : ref_price * tp_fixed_pct / 100
+float sl_dist = use_range_sizing ? math.min(math.max(cycle_range * sl_range_mult, min_dist_px), max_dist_px) : ref_price * sl_fixed_pct / 100
+float tp_pct_eff = f_pct(tp_dist, ref_price)
+float sl_pct_eff = f_pct(sl_dist, ref_price)
+
+int cycle_ms = timeframe.in_seconds(cycle_tf) * 1000
+
+var int pdh_bar = na
+var int pdl_bar = na
+if ta.change(time(cycle_tf))
+    int tb = bar_index
+    int tl = bar_index
+    for i = 1 to 500
+        if bar_index - i < 0 or time[i] < time[1] - cycle_ms
+            break
+        if high[i] == d_h
+            tb := bar_index[i]
+        if low[i] == d_l
+            tl := bar_index[i]
+    pdh_bar := tb
+    pdl_bar := tl
+
+var line  l_tp1 = na
+var line  l_sl = na
+var label lbl_tp1 = na
+var label lbl_sl = na
+var line  l_entry = na
+var label lbl_entry = na
+var line  pdh_line = na
+var line  pdl_line = na
+var label pdh_label = na
+var label pdl_label = na
+
+var float val_tp1 = na
+var float val_sl = na
+var bool  triggered = false
+var bool  hit_tp1 = false
+var bool  hit_sl = false
+var bool  trade_closed = false
+
+var int   day_start_bar = na
+var bool  locked_is_buy = false
+var float locked_entry_price = na
+var int   force_close_count = 0
+
+var int  cnt_pdh_from_below = 0
+var int  cnt_pdl_from_above = 0
+var bool was_on_pdh_fb = false
+var bool was_on_pdl_fa = false
+var bool broke_above_pdh = false
+var bool broke_below_pdl = false
+
+// حدث إغلاق موحّد لكل الخروجات
+float  ev_net   = na
+int    ev_time  = na
+bool   ev_isbuy = false
+string ev_label = ""
+bool   ev_fired = false
+
+// ═══════════════════════════════════════════════
+// لفّ الدورة
+// ═══════════════════════════════════════════════
+if ta.change(time(cycle_tf))
+    bool  trade_was_open = triggered and not trade_closed and not na(locked_entry_price) and not na(triggered_bar) and triggered_bar < bar_index
+    bool  keep_open      = keep_trade_on_cycle and trade_was_open
+    float saved_close    = close[1]
+
+    if trade_was_open and not keep_open
+        if enable_bridge_close_alert and not bridge_fc_close_sent
+            alert(f_pc_close(locked_is_buy), alert.freq_once_per_bar)
+        float cyc_net = f_net(locked_entry_price, saved_close, locked_is_buy)
+        ev_net   := cyc_net
+        ev_time  := locked_entry_time
+        ev_isbuy := locked_is_buy
+        ev_label := "CYCLE"
+        ev_fired := true
+        cnt_cyc  += 1
+        string c_text  = cyc_net > 0 ? "⏱ WIN +$" + str.tostring(cyc_net, "#.##") : cyc_net < 0 ? "⏱ LOSS -$" + str.tostring(math.abs(cyc_net), "#.##") : "⏱ BE $0"
+        color  c_color = cyc_net > 0 ? color.rgb(230, 123, 0) : cyc_net < 0 ? color.rgb(40, 197, 236) : color.gray
+        label.new(bar_index, cyc_net >= 0 ? high : low, c_text, color=color.new(c_color, 0), textcolor=color.black, style=cyc_net > 0 ? label.style_label_up : cyc_net < 0 ? label.style_label_down : label.style_label_center, size=selected_size)
+
+    if not keep_open
+        f_deleteLevels(l_tp1, l_sl, lbl_tp1, lbl_sl)
+        line.delete(l_entry)
+        label.delete(lbl_entry)
+        l_tp1 := na
+        l_sl := na
+        lbl_tp1 := na
+        lbl_sl := na
+        l_entry := na
+        lbl_entry := na
+        triggered_bar := na
+        val_tp1 := na
+        val_sl := na
+        triggered := false
+        hit_tp1 := false
+        hit_sl := false
+        trade_closed := false
+        force_close_count := 0
+        entry_alert_sent := false
+        bridge_fc_close_sent := false
+        intrabar_exit_state := 0
+        locked_is_buy := false
+        locked_entry_price := na
+        locked_entry_time := na
+
+    line.delete(pdh_line)
+    line.delete(pdl_line)
+    label.delete(pdh_label)
+    label.delete(pdl_label)
+    cnt_pdh_from_below := 0
+    cnt_pdl_from_above := 0
+    was_on_pdh_fb := false
+    was_on_pdl_fa := false
+    broke_above_pdh := false
+    broke_below_pdl := false
+
+    if in_date_range
+        day_start_bar := bar_index
+        if show_pdl_pdh
+            pdh_line  := line.new(pdh_bar, d_h, bar_index + offset_val, d_h, color=pd_color, width=1)
+            pdl_line  := line.new(pdl_bar, d_l, bar_index + offset_val, d_l, color=pd_color, width=1)
+            pdh_label := label.new(bar_index + offset_val, d_h, "PDH", color=color.new(color.black,100), textcolor=pd_color, style=label.style_label_left, size=size.tiny)
+            pdl_label := label.new(bar_index + offset_val, d_l, "PDL", color=color.new(color.black,100), textcolor=pd_color, style=label.style_label_left, size=size.tiny)
+
+// ═══════════════════════════════════════════════
+// عدّ اللمسات
+// ═══════════════════════════════════════════════
+bool is_touching_pdh = high >= d_h - touch_eps
+bool is_touching_pdl = low  <= d_l + touch_eps
+bool touch_pdh_from_below = is_touching_pdh and not broke_above_pdh
+bool touch_pdl_from_above = is_touching_pdl and not broke_below_pdl
+
+if in_date_range and not na(day_start_bar) and bar_index >= day_start_bar and barstate.isconfirmed and not triggered
+    if distinct_mode
+        if touch_pdh_from_below and not was_on_pdh_fb
+            cnt_pdh_from_below += 1
+        if touch_pdl_from_above and not was_on_pdl_fa
+            cnt_pdl_from_above += 1
+    else
+        if touch_pdh_from_below
+            cnt_pdh_from_below += 1
+        if touch_pdl_from_above
+            cnt_pdl_from_above += 1
+    was_on_pdh_fb := touch_pdh_from_below
+    was_on_pdl_fa := touch_pdl_from_above
+    if close > d_h + touch_eps
+        broke_above_pdh := true
+    if close < d_l - touch_eps
+        broke_below_pdl := true
+
+if barstate.islast
+    rx = bar_index + offset_val
+    if not na(l_tp1)
+        f_extendLevels(l_tp1, l_sl, lbl_tp1, lbl_sl, rx)
+    if not na(l_entry)
+        line.set_x2(l_entry, rx)
+    if not na(lbl_entry)
+        label.set_x(lbl_entry, rx)
+    if show_pdl_pdh
+        if not na(pdh_line)
+            line.set_x2(pdh_line, rx)
+        if not na(pdl_line)
+            line.set_x2(pdl_line, rx)
+        if not na(pdh_label)
+            label.set_x(pdh_label, rx)
+        if not na(pdl_label)
+            label.set_x(pdl_label, rx)
+
+// ═══════════════════════════════════════════════
+// دخول
+// ═══════════════════════════════════════════════
+curr_hour = hour(time)
+in_time_window = not enable_time_window ? true : (trade_start_hour <= trade_end_hour ? (curr_hour >= trade_start_hour and curr_hour <= trade_end_hour) : (curr_hour >= trade_start_hour or curr_hour <= trade_end_hour))
+
+bool want_long  = cnt_pdl_from_above >= touch_required
+bool want_short = cnt_pdh_from_below >= touch_required
+bool both_ready = want_long and want_short
+bool pick_long  = both_ready ? (cnt_pdl_from_above >= cnt_pdh_from_below) : want_long
+bool pick_short = both_ready ? not pick_long : want_short
+bool any_ready  = pick_long or pick_short
+
+// لمس PDH من الأسفل → شراء | لمس PDL من الأعلى → بيع
+bool is_buy_trade = not pick_long
+bool dir_allowed  = (allow_buy and is_buy_trade) or (allow_sell and not is_buy_trade)
+
+bool confirm_bull = f_is_bull_confirm(open, high, low, close, confirm_min_body_ratio, confirm_max_wick_ratio)
+bool confirm_bear = f_is_bear_confirm(open, high, low, close, confirm_min_body_ratio, confirm_max_wick_ratio)
+bool confirm_ok   = not enable_confirm_filter or not any_ready or (is_buy_trade ? confirm_bull : confirm_bear)
+
+entry_condition = in_date_range and in_time_window and not triggered and barstate.isconfirmed and any_ready and confirm_ok and volumeSpikePassed and dir_allowed
+
+if entry_condition
+    locked_is_buy := is_buy_trade
+    float planned_entry = close
+    locked_entry_price := planned_entry
+    locked_entry_time := time
+    float plan_mult = is_buy_trade ? 1.0 : -1.0
+    val_tp1 := planned_entry + plan_mult * tp_dist
+    val_sl  := planned_entry - plan_mult * sl_dist
+
+    f_deleteLevels(l_tp1, l_sl, lbl_tp1, lbl_sl)
+    line.delete(l_entry)
+    label.delete(lbl_entry)
+    l_entry   := line.new(bar_index, planned_entry, bar_index + offset_val, planned_entry, color=color.new(#2962FF, 0), width=2)
+    lbl_entry := label.new(bar_index + offset_val, planned_entry, "Entry: " + str.tostring(planned_entry, format.mintick), color=color.new(#2962FF, 25), textcolor=color.white, style=label.style_label_left, size=selected_size)
+    [e1, e2, e3, e4] = f_drawLevels(val_tp1, val_sl, planned_entry)
+    l_tp1 := e1
+    l_sl := e2
+    lbl_tp1 := e3
+    lbl_sl := e4
+
+    triggered := true
+    triggered_bar := bar_index
+    force_close_count := 0
+    intrabar_exit_state := 0
+    bridge_fc_close_sent := false
+
+    if locked_is_buy
+        label.new(bar_index, low, "▲ PDH ×" + str.tostring(touch_required), color=color.rgb(255, 251, 5), textcolor=color.rgb(8, 8, 8), style=label.style_label_up, size=size.tiny)
+    else
+        label.new(bar_index, high, "▼ PDL ×" + str.tostring(touch_required), color=color.rgb(136, 2, 177), textcolor=color.rgb(245, 246, 247), style=label.style_label_down, size=size.tiny)
+
+    if not entry_alert_sent
+        alert(f_pc_order(locked_is_buy, val_tp1, val_sl), alert.freq_once_per_bar)
+        entry_alert_sent := true
+
+// ═══════════════════════════════════════════════
+// خروج TP / SL
+// ═══════════════════════════════════════════════
+if in_date_range and triggered and not na(triggered_bar) and bar_index > triggered_bar and not trade_closed
+    tp1_c = (locked_is_buy and high >= val_tp1) or (not locked_is_buy and low <= val_tp1)
+    sl_c  = (locked_is_buy and low <= val_sl) or (not locked_is_buy and high >= val_sl)
+
+    if barstate.isnew
+        intrabar_exit_state := 0
+
+    if intrabar_exit_state == 0 and (tp1_c or sl_c)
+        intrabar_exit_state := f_pick_first_touch(val_tp1, val_sl, tp1_c, sl_c, locked_is_buy, ltf_high, ltf_low)
+
+    if intrabar_exit_state == 1 and not hit_tp1
+        hit_tp1 := true
+        trade_closed := true
+        cnt_tp += 1
+        ev_net   := f_net(locked_entry_price, val_tp1, locked_is_buy)
+        ev_time  := locked_entry_time
+        ev_isbuy := locked_is_buy
+        ev_label := "TP1"
+        ev_fired := true
+        label.new(bar_index, val_tp1, "TP1 ✅ +" + str.tostring(f_pct(val_tp1 - locked_entry_price, locked_entry_price), "#.###") + "%", color=#0cb112, textcolor=color.black, style=label.style_label_left, size=selected_size)
+    else if intrabar_exit_state == 2 and not hit_sl
+        hit_sl := true
+        trade_closed := true
+        cnt_sl += 1
+        ev_net   := f_net(locked_entry_price, val_sl, locked_is_buy)
+        ev_time  := locked_entry_time
+        ev_isbuy := locked_is_buy
+        ev_label := "SL"
+        ev_fired := true
+        label.new(bar_index, val_sl, "SL ❌ -" + str.tostring(f_pct(val_sl - locked_entry_price, locked_entry_price), "#.###") + "%", color=color.rgb(252,20,20), textcolor=color.white, style=label.style_label_left, size=selected_size)
+
+// ═══════════════════════════════════════════════
+// ستوب زمني بعدد الشموع من الدخول
+// ═══════════════════════════════════════════════
+bool time_stop_cond = enable_time_stop and triggered and not trade_closed and not na(triggered_bar) and barstate.isconfirmed and (bar_index - triggered_bar) >= time_stop_bars
+
+if time_stop_cond
+    force_close_count += 1
+    trade_closed := true
+    cnt_fc += 1
+    ev_net   := f_net(locked_entry_price, close, locked_is_buy)
+    ev_time  := locked_entry_time
+    ev_isbuy := locked_is_buy
+    ev_label := "FC"
+    ev_fired := true
+    if enable_bridge_close_alert and not bridge_fc_close_sent
+        alert(f_pc_close(locked_is_buy), alert.freq_once_per_bar)
+        bridge_fc_close_sent := true
+    label.new(bar_index, locked_is_buy ? low : high, "⏰ " + str.tostring(time_stop_bars) + " شمعة", color=color.new(color.orange, 20), textcolor=color.white, style=locked_is_buy ? label.style_label_up : label.style_label_down, size=selected_size)
+
+// ═══════════════════════════════════════════════
+// محاسبة موحّدة: كل صفقة مغلقة تُحتسب حسب صافي الربح
+// ═══════════════════════════════════════════════
+if ev_fired
+    f_record_trade(ev_time, ev_isbuy, ev_label, ev_net)
+    if in_date_range
+        net_usd_total += ev_net
+        if ev_net > 0
+            win_count += 1
+            win_usd_sum += ev_net
+            if not last_trade_was_win
+                current_lose_streak := 0
+            current_win_streak += 1
+            longest_win_streak := math.max(longest_win_streak, current_win_streak)
+            last_trade_was_win := true
+        else if ev_net < 0
+            lose_count += 1
+            lose_usd_sum += math.abs(ev_net)
+            if last_trade_was_win
+                current_win_streak := 0
+            current_lose_streak += 1
+            longest_lose_streak := math.max(longest_lose_streak, current_lose_streak)
+            last_trade_was_win := false
+
+plotshape(time_stop_cond, title="Time Stop", location=location.belowbar, color=color.orange, style=shape.diamond, size=size.tiny)
+
+// ═══════════════════════════════════════════════
+// الداشبورد
+// ═══════════════════════════════════════════════
+int   total_period_days = math.round((time - start_date) / 86400000)
+int   total_trades = win_count + lose_count
+float win_rate = total_trades > 0 ? win_count / total_trades * 100 : 0
+float profit_factor = lose_usd_sum > 0 ? win_usd_sum / lose_usd_sum : na
+
+var table d_table = na
+color GOLD_BG     = color.new(tbl_bg_clr, tbl_bg_transp)
+color GOLD_TEXT   = tbl_head_clr
+color GOLD_BRIGHT = tbl_head_clr
+color GOLD_MID    = tbl_label_clr
+color TRANSP      = color.new(#000000, 100)
+
+if barstate.islast
+    table.delete(d_table)
+    d_table := table.new(position.top_right, 3, 12, bgcolor=GOLD_BG, border_width=1, border_color=dash_border, frame_width=2, frame_color=dash_border)
+
+    table.cell(d_table, 0, 0, " 🥇 GOLD", text_color=GOLD_BRIGHT, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 1, 0, "NOOR", text_color=GOLD_TEXT, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 2, 0, " PD", text_color=GOLD_BRIGHT, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+
+    table.cell(d_table, 0, 1, "🤖 Bridge", text_color=color.new(#00FF88, 0), text_halign=text.align_left, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 1, 1, pc_symbol + " " + str.tostring(pc_lots, "#.##") + "L", text_color=color.new(#00FF88, 0), text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 2, 1, "sl/tp=price", text_color=color.new(#00FF88, 0), text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+
+    table.cell(d_table, 0, 2, use_range_sizing ? "📐 Range %" : "📐 Fixed %", text_color=GOLD_MID, text_halign=text.align_left, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 1, 2, "SL " + str.tostring(sl_pct_eff, "#.###") + "% ($" + str.tostring(sl_dist, "#.##") + ")", text_color=color.rgb(252,20,20), text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 2, 2, "TP " + str.tostring(tp_pct_eff, "#.###") + "% ($" + str.tostring(tp_dist, "#.##") + ")", text_color=#0cb112, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+
+    status_text  = triggered and not trade_closed ? "ACTIVE🟢" : triggered ? "CLOSED" : "WAITING⚠️"
+    status_color = triggered and not trade_closed ? color.rgb(0, 255, 221) : color.gray
+    result_text  = hit_sl ? "LOSS❌" : hit_tp1 ? "WIN✔️" : force_close_count > 0 ? "⏰" : "-"
+    table.cell(d_table, 0, 3, "Status", text_color=GOLD_MID, text_halign=text.align_left, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 1, 3, status_text, text_color=status_color, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 2, 3, result_text, text_color=GOLD_TEXT, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+
+    table.cell(d_table, 0, 4, "Period", text_color=GOLD_MID, text_halign=text.align_left, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 1, 4, str.format("{0,date,dd/MM/yy}", start_date), text_color=GOLD_BRIGHT, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 2, 4, total_period_days > 0 ? str.tostring(total_period_days) + "d" : "-", text_color=GOLD_TEXT, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+
+    table.cell(d_table, 0, 5, "Wins", text_color=color.green, text_halign=text.align_left, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 1, 5, str.tostring(win_count), text_color=color.lime, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 2, 5, "+$" + str.tostring(win_usd_sum, "#.##"), text_color=color.lime, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+
+    table.cell(d_table, 0, 6, "Losses", text_color=color.red, text_halign=text.align_left, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 1, 6, str.tostring(lose_count), text_color=color.red, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 2, 6, "-$" + str.tostring(lose_usd_sum, "#.##"), text_color=color.red, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+
+    table.cell(d_table, 0, 7, "Net P/L", text_color=GOLD_MID, text_halign=text.align_left, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 1, 7, str.tostring(total_trades) + " tr", text_color=GOLD_BRIGHT, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 2, 7, (net_usd_total >= 0 ? "+$" : "-$") + str.tostring(math.abs(net_usd_total), "#.##"), text_color=net_usd_total >= 0 ? color.lime : color.red, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+
+    table.cell(d_table, 0, 8, "Win % / PF", text_color=GOLD_MID, text_halign=text.align_left, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 1, 8, str.tostring(win_rate, "#.#") + "%", text_color=color.rgb(59,209,255), text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 2, 8, na(profit_factor) ? "-" : str.tostring(profit_factor, "#.##"), text_color=na(profit_factor) ? color.gray : profit_factor >= 1 ? color.lime : color.red, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+
+    cs_text  = current_win_streak > 0 ? str.tostring(current_win_streak) + " W" : current_lose_streak > 0 ? str.tostring(current_lose_streak) + " L" : "-"
+    cs_color = current_win_streak > 0 ? color.lime : current_lose_streak > 0 ? color.red : color.gray
+    table.cell(d_table, 0, 9, "Streak", text_color=GOLD_MID, text_halign=text.align_left, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 1, 9, cs_text, text_color=cs_color, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 2, 9, str.tostring(longest_win_streak) + "W/" + str.tostring(longest_lose_streak) + "L", text_color=GOLD_BRIGHT, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+
+    table.cell(d_table, 0, 10, "Exits", text_color=GOLD_MID, text_halign=text.align_left, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 1, 10, "TP " + str.tostring(cnt_tp) + " · SL " + str.tostring(cnt_sl), text_color=color.rgb(200,200,200), text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 2, 10, "FC " + str.tostring(cnt_fc) + " · CY " + str.tostring(cnt_cyc), text_color=color.rgb(200,200,200), text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+
+    touch_hud = "H" + str.tostring(cnt_pdh_from_below) + "/" + str.tostring(touch_required) + " L" + str.tostring(cnt_pdl_from_above) + "/" + str.tostring(touch_required)
+    table.cell(d_table, 0, 11, "⏱️ period", text_color=GOLD_MID, text_halign=text.align_left, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 1, 11, chart_tf + " → " + cycle_tf, text_color=GOLD_BRIGHT, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(d_table, 2, 11, touch_hud, text_color=color.rgb(200, 200, 255), text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+
+// ═══════════════════════════════════════════════
+// جدول سجل الصفقات
+// ═══════════════════════════════════════════════
+var table th_table = na
+th_position = th_table_position == "أسفل يمين" ? position.bottom_right : th_table_position == "أسفل يسار" ? position.bottom_left : position.top_left
+
+if barstate.islast and show_trade_history
+    table.delete(th_table)
+    int th_n = math.min(array.size(th_time), th_rows_display)
+    th_table := table.new(th_position, 5, th_n + 1, bgcolor=GOLD_BG, border_width=1, border_color=dash_border, frame_width=2, frame_color=dash_border)
+
+    table.cell(th_table, 0, 0, "#", text_color=GOLD_BRIGHT, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(th_table, 1, 0, "Entry Time", text_color=GOLD_BRIGHT, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(th_table, 2, 0, "Side", text_color=GOLD_BRIGHT, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(th_table, 3, 0, "Exit", text_color=GOLD_BRIGHT, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+    table.cell(th_table, 4, 0, "Net P/L", text_color=GOLD_BRIGHT, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+
+    if th_n > 0
+        for i = 0 to th_n - 1
+            int    r_time = array.get(th_time, i)
+            string r_side = array.get(th_side, i)
+            string r_exit = array.get(th_exit, i)
+            float  r_net  = array.get(th_net, i)
+            color side_color = r_side == "BUY" ? color.rgb(0, 230, 118) : color.rgb(255, 82, 82)
+            color pnl_color  = r_net > 0 ? color.rgb(0, 230, 118) : r_net < 0 ? color.rgb(255, 82, 82) : color.gray
+            int row = i + 1
+            table.cell(th_table, 0, row, str.tostring(row), text_color=color.rgb(200, 200, 200), text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+            table.cell(th_table, 1, row, str.format("{0,date,dd/MM} {0,time,HH:mm}", r_time), text_color=color.rgb(200, 200, 200), text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+            table.cell(th_table, 2, row, r_side, text_color=side_color, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+            table.cell(th_table, 3, row, r_exit, text_color=pnl_color, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
+            table.cell(th_table, 4, row, (r_net >= 0 ? "+" : "") + str.tostring(r_net, "#.##"), text_color=pnl_color, text_halign=text.align_center, text_size=dash_size, bgcolor=TRANSP)
