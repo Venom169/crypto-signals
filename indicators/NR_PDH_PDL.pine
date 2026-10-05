@@ -11,13 +11,14 @@ indicator(" N🤖R+15", overlay=true, max_lines_count=500, max_labels_count=500)
 cyc_tt = "دورة PDH/PDL: عند انقلاب هذه الفترة تُحدَّث الخطوط ويُعاد عدّ اللمسات."
 fc_tt  = "⏰ ستوب زمني: يُغلق الصفقة بعد عدد شموع محدد من شمعة الدخول."
 cnf_tt = "شمعة التأكيد: للصفقة الشرائية تُشترط شمعة صاعدة بجسم قوي وفتيل علوي صغير، وللبيعية العكس."
+tol_tt = "نسبة مئوية من سعر خط PDH/PDL. مثال: الذهب عند 3300 → 0.003% ≈ 0.10$."
 pct_tt = "نسبة مئوية من سعر الدخول. مثال: الذهب عند 3300 → 0.15% ≈ 4.95$."
 
 sl_3min  = input.float(0.15, "Stop Loss % (من سعر الدخول)", step=0.01, minval=0.001, tooltip=pct_tt, group="⏱ فريم 3دق")
 tp_3min  = input.float(0.15, "TP 1 % (من سعر الدخول)",      step=0.01, minval=0.001, tooltip=pct_tt, group="⏱ فريم 3دق")
 cyc_3min = input.string("60", "فترة الدورة", options=["15", "30", "60", "120", "240", "480", "720", "D"], tooltip=cyc_tt, group="⏱ فريم 3دق")
 touch_3min = input.int(2, "عدد اللمسات N", minval=1, maxval=99, group="⏱ فريم 3دق")
-tol_3min = input.float(0.10, "تسامح اللمس ($)", step=0.01, minval=0.0, group="⏱ فريم 3دق")
+tol_3min = input.float(0.003, "تسامح اللمس (%)", step=0.001, minval=0.0, tooltip=tol_tt, group="⏱ فريم 3دق")
 cnf_en_3min   = input.bool(false, "🕯 فلتر شمعة التأكيد", tooltip=cnf_tt, group="⏱ فريم 3دق")
 cnf_body_3min = input.float(0.5, "🕯 أدنى نسبة الجسم", minval=0.1, maxval=0.9, step=0.05, group="⏱ فريم 3دق")
 cnf_wick_3min = input.float(0.5, "🕯 أقصى نسبة الفتيل المعاكس", minval=0.1, maxval=0.9, step=0.05, group="⏱ فريم 3دق")
@@ -31,7 +32,7 @@ sl_5min  = input.float(0.15, "Stop Loss % (من سعر الدخول)", step=0.01
 tp_5min  = input.float(0.15, "TP 1 % (من سعر الدخول)",      step=0.01, minval=0.001, tooltip=pct_tt, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
 cyc_5min = input.string("60", "فترة الدورة", options=["15", "30", "60", "120", "240", "480", "720", "D"], tooltip=cyc_tt, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
 touch_5min = input.int(2, "عدد اللمسات N", minval=1, maxval=99, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
-tol_5min = input.float(0.10, "تسامح اللمس ($)", step=0.01, minval=0.0, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
+tol_5min = input.float(0.003, "تسامح اللمس (%)", step=0.001, minval=0.0, tooltip=tol_tt, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
 cnf_en_5min   = input.bool(false, "🕯 فلتر شمعة التأكيد", tooltip=cnf_tt, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
 cnf_body_5min = input.float(0.5, "🕯 أدنى نسبة الجسم", minval=0.1, maxval=0.9, step=0.05, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
 cnf_wick_5min = input.float(0.5, "🕯 أقصى نسبة الفتيل المعاكس", minval=0.1, maxval=0.9, step=0.05, group="⏱ فريم 5دق (والافتراضي لأي فريم آخر)")
@@ -48,7 +49,7 @@ float  sl_fixed_pct          = is_tf3 ? sl_3min : sl_5min
 float  tp_fixed_pct          = is_tf3 ? tp_3min : tp_5min
 string cycle_tf              = is_tf3 ? cyc_3min : cyc_5min
 int    touch_required        = is_tf3 ? touch_3min : touch_5min
-float  touch_tol_usd         = is_tf3 ? tol_3min : tol_5min
+float  touch_tol_pct         = is_tf3 ? tol_3min : tol_5min
 bool   enable_confirm_filter = is_tf3 ? cnf_en_3min : cnf_en_5min
 float  confirm_min_body_ratio= is_tf3 ? cnf_body_3min : cnf_body_5min
 float  confirm_max_wick_ratio= is_tf3 ? cnf_wick_3min : cnf_wick_5min
@@ -124,7 +125,6 @@ offset_val    = 10
 dash_size     = dashboard_size == "Tiny" ? size.tiny : dashboard_size == "Small" ? size.small : size.normal
 selected_size = dash_size
 in_date_range = time >= start_date
-touch_eps     = touch_tol_usd
 distinct_mode = touch_style == "لمسة منفصلة"
 use_range_sizing = sizing_mode == "نسبة من مدى الدورة"
 
@@ -408,8 +408,11 @@ if ta.change(time(cycle_tf))
 // ═══════════════════════════════════════════════
 // عدّ اللمسات
 // ═══════════════════════════════════════════════
-bool is_touching_pdh = high >= d_h - touch_eps
-bool is_touching_pdl = low  <= d_l + touch_eps
+// تسامح اللمس كنسبة مئوية من سعر كل خط
+float eps_pdh = d_h * touch_tol_pct / 100
+float eps_pdl = d_l * touch_tol_pct / 100
+bool is_touching_pdh = high >= d_h - eps_pdh
+bool is_touching_pdl = low  <= d_l + eps_pdl
 bool touch_pdh_from_below = is_touching_pdh and not broke_above_pdh
 bool touch_pdl_from_above = is_touching_pdl and not broke_below_pdl
 
@@ -426,9 +429,9 @@ if in_date_range and not na(day_start_bar) and bar_index >= day_start_bar and ba
             cnt_pdl_from_above += 1
     was_on_pdh_fb := touch_pdh_from_below
     was_on_pdl_fa := touch_pdl_from_above
-    if close > d_h + touch_eps
+    if close > d_h + eps_pdh
         broke_above_pdh := true
-    if close < d_l - touch_eps
+    if close < d_l - eps_pdl
         broke_below_pdl := true
 
 if barstate.islast
