@@ -1,0 +1,732 @@
+//@version=6
+// 🟢Daily gold ⚡Signals⚡ — أداة السنة v1 · باك-تست 4 سنين جوّا TradingView بدون Deep Backtesting
+// الشارت: 4h · فريم الإشارة (15) بينقرأ كشموع داخلية: 100,000 شمعة ≈ 4 سنين
+// المنطق منقول حرفياً من Daily-Gold-Signals-WaitLimit: Direct Entry + Entry Zone Wait كأمر معلّق
+//   (الأمر بسعر طرف المنطقة، اللمس = تنفيذ بسعر الأمر، إلغاء إذا الهدف قبل التنفيذ أو خلص الانتظار،
+//    إغلاق شمعة الكسر أصلاً واصل لسعر الأمر = ماركت بالإغلاق).
+// شمعة التنفيذ، والهدف والستوب بنفس الشمعة (Wait): شموع الدقيقة متل المؤشر. الأقدم من ~70 يوم ما إله دقيقة:
+//   بينحسب متل المؤشر بلا بيانات (ستوب)، وعدد هالحالات بسطر Exits («بلا 1m»).
+// v1.1: + 🚫 منع ساعات الدخول (بآخر الإعدادات، مطفي افتراضياً). بيحكم على ساعة الإعداد: شمعة كسر IB = وقت إرسال الأمر المعلّق.
+//       الإعداد الممنوع بيمشي بالمحرك متل العادة (👻) وما بينحسب، فالنتيجة = المجموع ناقص سطور «ساعة الإعداد» هي بالظبط.
+// v1.2: + فلترين (بآخر الإعدادات، مطفيين افتراضياً = نفس نتيجة v1.1). بيشتغلوا متل فلاتر المؤشر (Pre-Trend): الإعداد بينلغى
+//       فعلاً والمحرك بيرجع يدوّر، فما في «المجموع ناقص سطور»: قارن تشغيلتين (مطفي/شغّال) بـ Group by «سنة».
+//       🛡 حارس القاعدة: شمعة سكّرت ورا قاعدة الشمعة الحاكمة قبل الكسر = الإعداد ميّت، بينلغى (ونفس الشمعة بتقدر تبلّش إعداد جديد).
+//       🧭 اتجاه اليوم: الكسر لازم يسكّر بجهة افتتاح اليوم (شراء فوقه، بيع تحته).
+indicator("🟢Daily gold — أداة السنة v1.2", overlay = true)
+
+// ═══════════════════════════════════════════════
+// 1) الفريم
+// ═══════════════════════════════════════════════
+sig_tf = input.timeframe("15", "فريم الإشارة", tooltip="الفريم اللي بيشتغل عليه المؤشر الأصلي. لازم يكون أصغر من فريم الشارت. حط الشارت على 4h لتاخد 4 سنين.", group="⏱ الفريم")
+
+// ═══════════════════════════════════════════════
+// 2) إعدادات المؤشر (نفس الأسماء والقيم الافتراضية = إعداداتك)
+// ═══════════════════════════════════════════════
+preset_opt = input.string("🟡 Entry Zone Wait", "Preset", options=["🟢 Direct Entry", "🟡 Entry Zone Wait"], group="🎛️ Preset")
+enable_entry_wait_eff = preset_opt == "🟡 Entry Zone Wait"
+
+g_direct = "🟢 إعدادات Direct Entry"
+direct_enable_dom          = input.bool(true, "🟢 تفعيل الشمعة الحاكمة (Dominant Candle)", group=g_direct)
+direct_lookback            = input.int(7, "فترة الكسر IB Lookback", minval=3, maxval=50, group=g_direct)
+direct_sl_fib              = input.string("-23.6%", "مستوى الستوب SL Fib", options=["-0% (Base)", "-23.6%", "-38.2%", "-50.0%", "-61.8%", "-78.6%", "-88.6%", "-100.0%"], group=g_direct)
+direct_tp1_fib             = input.float(161.8, "TP1 Fib %", minval=50.0, maxval=500.0, step=0.1, group=g_direct)
+direct_dom_mult            = input.float(0.8,  "مضاعف مخفف",     minval=0.5, maxval=2.0, step=0.1,  group=g_direct)
+direct_body_ratio          = input.float(0.45, "نسبة جسم مخففة", minval=0.3, maxval=0.8, step=0.05, group=g_direct)
+direct_use_reset           = input.bool(true,  "اعادة ضبط عند شمعة اقوى", group=g_direct)
+use_direct_pretrend_filter = input.bool(true, "🧭 IB Direct Pre-Trend Filter", group=g_direct)
+direct_pretrend_bars       = input.int(5, "Pre-Trend Bars", minval=2, maxval=10, group=g_direct)
+direct_enable_min          = input.bool(true, "تفعيل فلتر الحد الأدنى", group=g_direct)
+direct_min_target          = input.float(5.0, "الحد الأدنى بالدولار (TP1 و SL)", minval=0.0, step=0.5, group=g_direct)
+direct_enable_max          = input.bool(false, "تفعيل فلتر الحد الأقصى (منع فتح صفقة بهدف/وقف اكثر من الحد)", group=g_direct)
+direct_max_tp              = input.float(50.0, "الحد الأقصى للهدف TP1 بالدولار", minval=0.0, step=0.5, group=g_direct)
+direct_max_sl              = input.float(20.0, "الحد الأقصى للوقف SL بالدولار", minval=0.0, step=0.5, group=g_direct)
+
+g_wait = "🟡 إعدادات Entry Zone Wait"
+wait_enable_dom = input.bool(true, "🟡 تفعيل الشمعة الحاكمة (Dominant Candle)", group=g_wait)
+wait_lookback   = input.int(4, "فترة الكسر IB Lookback", minval=3, maxval=50, group=g_wait)
+wait_entry_mode = input.string("Best Entry (50-61.8%)", "منطقة الدخول", options=["Swap Zone (23.6-38.2%)", "Best Entry (50-61.8%)", "Deep Entry (78.6-88.6%)"], group=g_wait)
+wait_sl_fib     = input.string("-0% (Base)", "مستوى الستوب SL Fib", options=["-0% (Base)", "-23.6%", "-38.2%", "-50.0%", "-61.8%", "-78.6%", "-88.6%", "-100.0%"], group=g_wait)
+wait_tp1_fib    = input.float(110, "TP1 Fib %", minval=50.0, maxval=500.0, step=0.1, group=g_wait)
+wait_lim_pos    = input.string("الطرف القريب", "📍 مكان الأمر المعلّق بالمنطقة", options=["الطرف القريب", "نص المنطقة", "الطرف البعيد"], group=g_wait)
+max_wait_bars   = input.int(10, "⏳ أقصى انتظار للدخول (شموع)", minval=1, maxval=200, group=g_wait)
+wait_dom_mult   = input.float(0.8,  "مضاعف مخفف",     minval=0.5, maxval=2.0, step=0.1,  group=g_wait)
+wait_body_ratio = input.float(0.45, "نسبة جسم مخففة", minval=0.3, maxval=0.8, step=0.05, group=g_wait)
+wait_use_reset  = input.bool(true,  "اعادة ضبط عند شمعة اقوى", group=g_wait)
+wait_enable_min = input.bool(true, "تفعيل فلتر الحد الأدنى", group=g_wait)
+wait_min_target = input.float(10.0, "الحد الأدنى بالدولار (TP1 و SL)", minval=0.0, step=0.5, group=g_wait)
+wait_enable_max = input.bool(true, "تفعيل فلتر الحد الأقصى (منع فتح صفقة بهدف/وقف اكثر من الحد)", group=g_wait)
+wait_max_tp     = input.float(35.0, "الحد الأقصى للهدف TP1 بالدولار", minval=0.0, step=0.5, group=g_wait)
+wait_max_sl     = input.float(28.0, "الحد الأقصى للوقف SL بالدولار", minval=0.0, step=0.5, group=g_wait)
+
+g_slcap    = "🛑 Daily Stop Limit"
+use_sl_cap = input.bool(false, "Pause after N SL in a day (until next day)", group=g_slcap)
+sl_cap_n   = input.int(2, "N (SL count)", minval=1, group=g_slcap)
+
+// ═══════════════════════════════════════════════
+// 3) التقرير
+// ═══════════════════════════════════════════════
+g_rep = "📊 التقرير"
+start_date           = input.time(timestamp("01 Jan 2020 00:00 +0000"), "Start Date", tooltip="للمطابقة: بالمؤشر شغّل «تفعيل فلتر تاريخ البداية» وحط نفس التاريخ والساعة بالظبط.", group=g_rep)
+manual_usd_per_price = input.float(1.0, "$ لكل 1.0 حركة سعر", step=0.01, minval=0.0000001, tooltip="1.0 = نفس نقاط المؤشر (لوحة ⚡ PTS).", group=g_rep)
+trade_cost_usd       = input.float(0.0, "💰 تكلفة الصفقة $ (سبريد + انزلاق)", step=0.1, group=g_rep)
+group_by             = input.string("سنة", "📑 Group by", options=["شهر", "سنة", "ساعة الدخول", "ساعة الإعداد", "يوم الأسبوع", "الاتجاه", "نوع الدخول"], tooltip="لون اسم السطر: أحمر/أخضر غامق = فرقه عن باقي الصفقات حقيقي (|z| ≥ 3)، فاتح = ممكن صدفة (|z| بين 2 و3). مرّق الماوس عالاسم لتشوف z · الساعة واليوم بتوقيت البورصة (نيويورك لـ FXCM) · ساعة الدخول = شمعة التنفيذ · ساعة الإعداد = شمعة كسر IB (وقت إرسال الأمر المعلّق)، وعليها بيحكم 🚫 · نوع الدخول: Limit = الأمر المعلّق اتنفّذ، Market = إغلاق شمعة الكسر كان أصلاً واصل لسعر الأمر، Direct = Direct Entry.", group=g_rep)
+tbl_pos_in           = input.string("أعلى يمين", "📍 موضع الجدول", options=["أعلى يمين", "أعلى يسار", "أسفل يمين", "أسفل يسار"], group=g_rep)
+tbl_size_in          = input.string("Small", "🔠 حجم النص", options=["Tiny", "Small", "Normal"], group=g_rep)
+
+// ═══════════════════════════════════════════════
+// 4) [v1.1] منع ساعات الدخول (آخر الإعدادات عن قصد، حتى ما يتغيّر ترتيب القديمة)
+// ═══════════════════════════════════════════════
+g_hb              = "🚫 منع ساعات الدخول"
+enable_hour_block = input.bool(false, "🚫 منع ساعات الدخول", tooltip="بيحكم على ساعة الإعداد: شمعة كسر IB، وقت ما بينبعت الأمر المعلّق (وبـ Direct وMarket نفس شمعة الدخول)، بتوقيت البورصة متل جدول «ساعة الإعداد». الإعداد الممنوع بيمشي بالمحرك متل العادة (👻) بس ما بينبعتلو أمر وما بينحسب، فالنتيجة = المجموع ناقص سطور «ساعة الإعداد» هي بالظبط (إذا Daily Stop Limit مطفي).", group=g_hb)
+blocked_hours     = input.string("", "🚫 الساعات (مثال: 6,2)", tooltip="أي فاصل بيمشي: 6,2 أو 6،2 أو 6.2 أو 6 2", group=g_hb)
+
+// ═══════════════════════════════════════════════
+// 5) [v1.2] فلترين (كمان بآخر الإعدادات، نفس السبب)
+// ═══════════════════════════════════════════════
+g_v12          = "🛡🧭 فلاتر v1.2"
+use_base_guard = input.bool(false, "🛡 حارس القاعدة (Base Guard)", tooltip="وإنت ناطر الكسر: إذا شمعة سكّرت تحت قاعدة الشمعة الحاكمة (للشراء، أو فوقها للبيع)، الإعداد ميّت وبينلغى. بلاه، الإعداد بيضل شغّال ولو السعر كسر القاعدة، ولما يجي الكسر بيطلع ستوب الـ Wait على مستوى انكسر أصلاً، وبـ Direct ممكن يطلع ستوب صغير كتير (5% من المدى). الذيل لحالو ما بيلغي، بس الإغلاق. نفس الشمعة بتقدر تبلّش إعداد جديد إذا كانت حاكمة.", group=g_v12)
+use_day_bias   = input.bool(false, "🧭 اتجاه اليوم (Day Bias)", tooltip="على شمعة الكسر: الشراء بس إذا سكّرت فوق افتتاح اليوم، والبيع بس تحته. افتتاح اليوم = أول شمعة بيوم التداول تبع الرمز (FXCM: الساعة 17:00 نيويورك). ما إلو أرقام، فبيمشي نفس الشي على 1,800$ وعلى 4,000$. للـ Direct والـ Wait.", group=g_v12)
+
+// ═══════════════════════════════════════════════
+// القيم الفعّالة (متل المؤشر)
+// ═══════════════════════════════════════════════
+eff_enable_dom = enable_entry_wait_eff ? wait_enable_dom : direct_enable_dom
+eff_lookback   = enable_entry_wait_eff ? wait_lookback : direct_lookback
+eff_entry_mode = wait_entry_mode
+eff_sl_fib_str = enable_entry_wait_eff ? wait_sl_fib : direct_sl_fib
+eff_tp1_fib    = enable_entry_wait_eff ? wait_tp1_fib : direct_tp1_fib
+eff_dom_mult   = enable_entry_wait_eff ? wait_dom_mult : direct_dom_mult
+eff_body_ratio = enable_entry_wait_eff ? wait_body_ratio : direct_body_ratio
+eff_use_reset  = enable_entry_wait_eff ? wait_use_reset : direct_use_reset
+eff_enable_min = enable_entry_wait_eff ? wait_enable_min : direct_enable_min
+eff_min_target = enable_entry_wait_eff ? wait_min_target : direct_min_target
+eff_enable_max = enable_entry_wait_eff ? wait_enable_max : direct_enable_max
+eff_max_tp     = enable_entry_wait_eff ? wait_max_tp : direct_max_tp
+eff_max_sl     = enable_entry_wait_eff ? wait_max_sl : direct_max_sl
+
+eff_sl_fib_mult = eff_sl_fib_str == "-0% (Base)" ? 0.0 : eff_sl_fib_str == "-23.6%" ? 0.236 : eff_sl_fib_str == "-38.2%" ? 0.382 : eff_sl_fib_str == "-50.0%" ? 0.500 : eff_sl_fib_str == "-61.8%" ? 0.618 : eff_sl_fib_str == "-78.6%" ? 0.786 : eff_sl_fib_str == "-88.6%" ? 0.886 : 1.0
+
+f_e1    = eff_entry_mode == "Swap Zone (23.6-38.2%)" ? 0.236 : eff_entry_mode == "Best Entry (50-61.8%)" ? 0.500 : 0.786
+f_e2    = eff_entry_mode == "Swap Zone (23.6-38.2%)" ? 0.382 : eff_entry_mode == "Best Entry (50-61.8%)" ? 0.618 : 0.886
+f_lim_r = wait_lim_pos == "الطرف البعيد" ? f_e1 : wait_lim_pos == "نص المنطقة" ? (f_e1 + f_e2) / 2.0 : f_e2
+
+// [v1.1] الساعات الممنوعة: أي فاصل مقبول، وبس الأرقام 0..23 بتنحسب
+string bh_norm = str.replace_all(str.replace_all(str.replace_all(str.replace_all(blocked_hours, "،", ","), ".", ","), ";", ","), " ", ",")
+array<string> bh_tok = str.split(bh_norm, ",")
+array<int> bh_list = array.new<int>()
+for tok in bh_tok
+    float hv = str.tonumber(tok)
+    if not na(hv) and hv >= 0 and hv <= 23
+        array.push(bh_list, int(hv))
+bool hb_on = enable_hour_block and array.size(bh_list) > 0
+
+// ═══════════════════════════════════════════════
+// دوال المؤشر (نفس الحساب)
+// ═══════════════════════════════════════════════
+f_calc_sl(int _dir, float _v_base, float _v_range) =>
+    _dir == 1 ? _v_base - _v_range * eff_sl_fib_mult : _v_base + _v_range * eff_sl_fib_mult
+
+f_calc_tp1_raw(int _dir, float _v_base, float _v_range) =>
+    _dir == 1 ? _v_base + _v_range * (eff_tp1_fib / 100.0) : _v_base - _v_range * (eff_tp1_fib / 100.0)
+
+f_calc_sl_safe(int _dir, float _v_base, float _v_range, float _entry_px) =>
+    float _sl = f_calc_sl(_dir, _v_base, _v_range)
+    if _dir == 1 and _sl >= _entry_px
+        _sl := _entry_px - _v_range * 0.05
+    if _dir == -1 and _sl <= _entry_px
+        _sl := _entry_px + _v_range * 0.05
+    _sl
+
+f_target_ok(float _tp1_px, float _sl_px, float _entry_px, float _sl_ref_px) =>
+    float _sl_ref_eff = na(_sl_ref_px) ? _entry_px : _sl_ref_px
+    bool  _min_tp_ok  = not eff_enable_min or (math.abs(_tp1_px - _entry_px) >= eff_min_target)
+    bool  _min_sl_ok  = not eff_enable_min or (math.abs(_sl_ref_eff - _sl_px) >= eff_min_target)
+    bool  _max_tp_ok  = not eff_enable_max or (math.abs(_tp1_px - _entry_px) <= eff_max_tp)
+    bool  _max_sl_ok  = not eff_enable_max or (math.abs(_entry_px - _sl_px) <= eff_max_sl)
+    _min_tp_ok and _min_sl_ok and _max_tp_ok and _max_sl_ok
+
+f_tp_pts(float _tp, float _entry, int _dir) =>
+    _dir == 1 ? _tp - _entry : _entry - _tp
+
+f_sl_pts(float _sl, float _entry, int _dir) =>
+    float _raw = _dir == 1 ? _sl - _entry : _entry - _sl
+    math.min(_raw, -0.01)
+
+// ═══════════════════════════════════════════════
+// قراءة شموع فريم الإشارة (+ اللي بيحتاج تاريخها: متوسط الجسم، قمة/قاع IB، حركة Pre-Trend، [v1.2] افتتاح اليوم)
+// ═══════════════════════════════════════════════
+f_feed() =>
+    float _b = math.abs(close - open)
+    [open, high, low, close, time, ta.sma(_b, 20), ta.highest(high[1], eff_lookback), ta.lowest(low[1], eff_lookback), close[1] - close[direct_pretrend_bars], ta.valuewhen(timeframe.change("D"), open, 0)]
+
+[a_o, a_h, a_l, a_c, a_t, a_ab, a_ibh, a_ibl, a_pm, a_dop] = request.security_lower_tf(syminfo.tickerid, sig_tf, f_feed())
+
+// شموع الدقيقة (آخر ~70 يوم): ترتيب الأحداث جوّا شمعة فريم الإشارة
+[m_t, m_h, m_l] = request.security_lower_tf(syminfo.tickerid, "1", [time, high, low])
+
+// مين انضرب أول: 1 = الهدف، 2 = الستوب (نفس الدقيقة = ستوب)، 0 = بلا بيانات دقيقة (المؤشر بيعتبرها ستوب)
+f_first(bool _is_buy, float _tp, float _sl, int _m0, int _m1) =>
+    int _picked = 0
+    if _m1 > _m0
+        _picked := 2
+        for _i = _m0 to _m1 - 1
+            float _hh  = array.get(m_h, _i)
+            float _ll  = array.get(m_l, _i)
+            bool  _tpi = _is_buy ? _hh >= _tp : _ll <= _tp
+            bool  _sli = _is_buy ? _ll <= _sl : _hh >= _sl
+            if _tpi or _sli
+                _picked := _tpi and not _sli ? 1 : 2
+                break
+    _picked
+
+// شمعة التنفيذ: 0 = لسا مفتوحة، 1 = هدف، 2 = ستوب (نفس f_after_fill تبع المؤشر)
+f_after_fill(bool _is_buy, float _px, float _tp, float _sl, int _m0, int _m1, float _bh, float _bl) =>
+    int  _res    = 0
+    bool _filled = false
+    if _m1 > _m0
+        for _i = _m0 to _m1 - 1
+            float _hh = array.get(m_h, _i)
+            float _ll = array.get(m_l, _i)
+            if not _filled
+                if _is_buy ? _ll <= _px : _hh >= _px
+                    _filled := true
+                    if _is_buy ? _ll <= _sl : _hh >= _sl
+                        _res := 2
+                        break
+            else
+                bool _tpi = _is_buy ? _hh >= _tp : _ll <= _tp
+                bool _sli = _is_buy ? _ll <= _sl : _hh >= _sl
+                if _tpi or _sli
+                    _res := _tpi and not _sli ? 1 : 2
+                    break
+    if not _filled
+        _res := (_is_buy ? _bl <= _sl : _bh >= _sl) ? 2 : 0
+    _res
+
+f_net(float _pts) =>
+    _pts * manual_usd_per_price - trade_cost_usd
+
+f_gkey(int _t, bool _buy, int _kind, int _set_t) =>
+    int k = 0
+    if group_by == "شهر"
+        k := year(_t, syminfo.timezone) * 100 + month(_t, syminfo.timezone)
+    else if group_by == "سنة"
+        k := year(_t, syminfo.timezone)
+    else if group_by == "ساعة الدخول"
+        k := hour(_t, syminfo.timezone)
+    else if group_by == "ساعة الإعداد"
+        k := hour(_set_t, syminfo.timezone)
+    else if group_by == "يوم الأسبوع"
+        k := dayofweek(_t, syminfo.timezone)
+    else if group_by == "نوع الدخول"
+        k := _kind
+    else
+        k := _buy ? 1 : 0
+    k
+
+f_glabel(int _k) =>
+    string s = ""
+    if group_by == "شهر"
+        s := (_k % 100 < 10 ? "0" : "") + str.tostring(_k % 100) + "/" + str.tostring(int(_k / 100))
+    else if group_by == "سنة"
+        s := str.tostring(_k)
+    else if group_by == "ساعة الدخول" or group_by == "ساعة الإعداد"
+        s := (_k < 10 ? "0" : "") + str.tostring(_k) + ":00"
+    else if group_by == "يوم الأسبوع"
+        s := _k == 1 ? "Sun" : _k == 2 ? "Mon" : _k == 3 ? "Tue" : _k == 4 ? "Wed" : _k == 5 ? "Thu" : _k == 6 ? "Fri" : "Sat"
+    else if group_by == "نوع الدخول"
+        s := _k == 1 ? "Direct" : _k == 2 ? "Limit" : "Market"
+    else
+        s := _k == 1 ? "BUY" : "SELL"
+    s
+
+// ═══════════════════════════════════════════════
+// الحالة (محفوظة بين الشموع) — نفس متغيرات المؤشر
+// ═══════════════════════════════════════════════
+var int   state           = 0
+var int   dir             = 0
+var float v_base          = na
+var float v_ib            = na
+var float v_range         = na
+var float dom_body_high   = na
+var float dom_body_low    = na
+var float p_sl            = na
+var float p_tp1           = na
+var float p_lim           = na
+var float last_sig_px     = na
+var int   trade_entry_bar = na
+var int   wait_start_bar  = na
+var int   day_sl_cnt      = 0
+var int   last_day_num    = 0
+
+var int   gidx    = 0        // رقم شمعة فريم الإشارة (= bar_index بالمؤشر)
+var int   e_time  = na
+var int   e_kind  = 0        // 1 = Direct، 2 = Limit، 3 = Market
+var int   first_t = na
+var int   last_t  = na
+var int   c_tp    = 0
+var int   c_sl    = 0
+var int   c_1m    = 0        // حالات حسمتها شموع الدقيقة
+var int   c_no1m  = 0        // حالات ما إلها دقيقة (متل المؤشر: ستوب، أو الصفقة بتضل مفتوحة)
+var int   c_ord   = 0        // أوامر معلّقة انبعتت
+var int   c_fill  = 0        // أوامر اتنفّذت
+var int   c_mkt   = 0        // دخول ماركت (السعر أصلاً واصل لسعر الأمر)
+var int   c_xtp   = 0        // إلغاء: الهدف قبل التنفيذ
+var int   c_xwt   = 0        // إلغاء: خلص الانتظار
+var int   c_xsl   = 0        // إلغاء: السعر لورا الستوب
+var int   e_set_t = na       // [v1.1] وقت شمعة الإعداد (كسر IB)
+var bool  e_virt  = false    // [v1.1] الإعداد بساعة ممنوعة: بيمشي بالمحرك وما بينحسب (👻)
+var int   c_hb    = 0        // [v1.1] كم صفقة (مسكّرة) شالها 🚫
+var int   c_xbase = 0        // [v1.2] كم إعداد لغاه 🛡
+var int   c_xbias = 0        // [v1.2] كم إعداد رفضه 🧭
+
+var array<int>   tr_t    = array.new<int>()
+var array<float> tr_net  = array.new<float>()
+var array<bool>  tr_buy  = array.new<bool>()
+var array<int>   tr_kind = array.new<int>()
+var array<int>   tr_set  = array.new<int>()   // [v1.1] وقت شمعة الإعداد لكل صفقة
+
+// ═══════════════════════════════════════════════
+// المحرّك: كل شمعة فريم إشارة بالترتيب، بنفس ترتيب المؤشر
+// (بس الشموع المؤكدة: شمعة الشارت اللي لسا مفتوحة بتنحسب لما تسكّر)
+// ═══════════════════════════════════════════════
+int sig_ms = timeframe.in_seconds(sig_tf) * 1000
+int n_ib   = array.size(a_t)
+int n_m    = array.size(m_t)
+int mi     = 0
+if barstate.isconfirmed and n_ib > 0
+    for i = 0 to n_ib - 1
+        float bo  = array.get(a_o, i)
+        float bh  = array.get(a_h, i)
+        float bl  = array.get(a_l, i)
+        float bc  = array.get(a_c, i)
+        int   bt  = array.get(a_t, i)
+        float ab  = array.get(a_ab, i)
+        float ibh = array.get(a_ibh, i)
+        float ibl = array.get(a_ibl, i)
+        float pmv = array.get(a_pm, i)
+        float dop = array.get(a_dop, i)
+
+        if na(first_t)
+            first_t := bt
+        last_t := bt
+
+        // ── شموع الدقيقة تبع هالشمعة: [m0, m1)
+        while mi < n_m and array.get(m_t, mi) < bt
+            mi += 1
+        int m0 = mi
+        while mi < n_m and array.get(m_t, mi) < bt + sig_ms
+            mi += 1
+        int m1 = mi
+
+        // ── يوم جديد (متل المؤشر: dayofmonth(time))
+        int cur_day = dayofmonth(bt, syminfo.timezone)
+        if cur_day != last_day_num
+            day_sl_cnt   := 0
+            last_day_num := cur_day
+
+        // ── CANDLE METRICS
+        float body     = math.abs(bc - bo)
+        float c_range  = bh - bl
+        bool  dom_bull = bc > bo and body > ab * eff_dom_mult and c_range > 0 and body / c_range > eff_body_ratio
+        bool  dom_bear = bc < bo and body > ab * eff_dom_mult and c_range > 0 and body / c_range > eff_body_ratio
+
+        // ── إعادة حساب المستويات عند state 4 أو 5
+        if (state == 4 or state == 5) and not na(v_base) and not na(v_range)
+            p_tp1 := dir == 1 ? v_base + v_range * (eff_tp1_fib / 100.0) : v_base - v_range * (eff_tp1_fib / 100.0)
+            p_sl  := f_calc_sl(dir, v_base, v_range)
+            float ep2 = not na(last_sig_px) ? last_sig_px : bc
+            if dir == 1 and p_sl >= ep2
+                p_sl := ep2 - v_range * 0.05
+            if dir == -1 and p_sl <= ep2
+                p_sl := ep2 + v_range * 0.05
+
+        bool fill_now = false
+        bool mkt_now  = false
+        bool do_clean = false
+
+        // ── [v1.2] 🛡 حارس القاعدة: إغلاق ورا القاعدة وإنت ناطر الكسر = الإعداد ميّت
+        //    قبل STATE 0 عن قصد: نفس الشمعة بتقدر تبلّش إعداد جديد إذا كانت حاكمة
+        if use_base_guard and state == 1 and not na(v_base) and (dir == 1 ? bc < v_base : bc > v_base)
+            state    := 0
+            do_clean := true
+            c_xbase  += 1
+
+        // ── STATE 0 - IDLE
+        if state == 0
+            if bt >= start_date and not (use_sl_cap and day_sl_cnt >= sl_cap_n)
+                if eff_enable_dom and dom_bull
+                    state         := 1
+                    dir           := 1
+                    v_base        := bl
+                    dom_body_high := math.max(bo, bc)
+                    dom_body_low  := math.min(bo, bc)
+                else if eff_enable_dom and dom_bear
+                    state         := 1
+                    dir           := -1
+                    v_base        := bh
+                    dom_body_high := math.max(bo, bc)
+                    dom_body_low  := math.min(bo, bc)
+                else if not eff_enable_dom and bc > bo and body > ab
+                    state  := 1
+                    dir    := 1
+                    v_base := bl
+                else if not eff_enable_dom and bc < bo and body > ab
+                    state  := 1
+                    dir    := -1
+                    v_base := bh
+
+        // ── STATE 1 - Wait IB
+        else if state == 1
+            if eff_enable_dom and eff_use_reset
+                float dom_size = math.abs(dom_body_high - dom_body_low)
+                if dom_bull and dir == 1 and body > dom_size * 1.1
+                    v_base        := bl
+                    dom_body_high := math.max(bo, bc)
+                    dom_body_low  := math.min(bo, bc)
+                else if dom_bear and dir == -1 and body > dom_size * 1.1
+                    v_base        := bh
+                    dom_body_high := math.max(bo, bc)
+                    dom_body_low  := math.min(bo, bc)
+
+            bool brk = dir == 1 ? (bc > ibh and body > ab * 0.7) : (bc < ibl and body > ab * 0.7)
+            if brk
+                v_ib    := dir == 1 ? bh : bl
+                v_range := math.abs(v_ib - v_base)
+                bool  is_direct = not enable_entry_wait_eff
+                float lim0 = dir == 1 ? v_base + v_range * f_lim_r : v_base - v_range * f_lim_r
+                float fe   = is_direct ? bc : dir == 1 ? math.min(bc, lim0) : math.max(bc, lim0)
+                float tpc  = f_calc_tp1_raw(dir, v_base, v_range)
+                float slc  = f_calc_sl_safe(dir, v_base, v_range, fe)
+                float sref = is_direct ? na : v_ib
+                if f_target_ok(tpc, slc, fe, sref)
+                    bool pre_ok = true
+                    if is_direct and use_direct_pretrend_filter
+                        pre_ok := na(pmv) ? true : dir == 1 ? pmv > 0 : pmv < 0
+                    // [v1.2] 🧭 اتجاه اليوم: الكسر لازم يسكّر بجهة افتتاح اليوم
+                    bool bias_ok = not use_day_bias or na(dop) or (dir == 1 ? bc > dop : bc < dop)
+                    if is_direct and not pre_ok
+                        state    := 0
+                        do_clean := true
+                    else if not bias_ok
+                        state    := 0
+                        do_clean := true
+                        c_xbias  += 1
+                    else if enable_entry_wait_eff
+                        state          := 5
+                        p_lim          := lim0
+                        mkt_now        := dir == 1 ? bc <= p_lim : bc >= p_lim
+                        last_sig_px    := bc
+                        wait_start_bar := gidx
+                        e_set_t        := bt
+                        e_virt         := hb_on and array.includes(bh_list, hour(bt, syminfo.timezone))
+                        c_ord          += (mkt_now or e_virt) ? 0 : 1
+                    else
+                        state           := 4
+                        last_sig_px     := bc
+                        trade_entry_bar := gidx
+                        e_time          := bt
+                        e_kind          := 1
+                        e_set_t         := bt
+                        e_virt          := hb_on and array.includes(bh_list, hour(bt, syminfo.timezone))
+                else
+                    state    := 0
+                    do_clean := true
+
+        // ── STATE 5 - Wait Entry Zone = أمر معلّق (على شمعة الكسر نفسها بس لدخول الماركت)
+        if state == 5 and (gidx > wait_start_bar or mkt_now)
+            int   el  = gidx - wait_start_bar
+            float slr = f_calc_sl(dir, v_base, v_range)
+            bool  tch = not na(p_lim) and (mkt_now or (dir == 1 ? bl <= p_lim : bh >= p_lim))
+            float fpx = mkt_now ? bc : dir == 1 ? math.min(bo, p_lim) : math.max(bo, p_lim)
+            if tch and (dir == 1 ? fpx <= slr : fpx >= slr)
+                state    := 0
+                do_clean := true
+                c_xsl    += e_virt ? 0 : 1
+            else if tch
+                fill_now        := not mkt_now
+                p_lim           := fpx
+                state           := 4
+                last_sig_px     := fpx
+                trade_entry_bar := gidx
+                e_time          := bt
+                e_kind          := mkt_now ? 3 : 2
+                c_fill          += (mkt_now or e_virt) ? 0 : 1
+                c_mkt           += (mkt_now and not e_virt) ? 1 : 0
+            else if dir == 1 ? bh >= p_tp1 : bl <= p_tp1
+                state    := 0
+                do_clean := true
+                c_xtp    += e_virt ? 0 : 1
+            else if el >= max_wait_bars
+                state    := 0
+                do_clean := true
+                c_xwt    += e_virt ? 0 : 1
+
+        // ── STATE 4 - Monitor TP1/SL
+        if state == 4
+            bool can_x = not na(trade_entry_bar) and (gidx > trade_entry_bar or fill_now)
+            if can_x
+                bool tpx = dir == 1 ? bh >= p_tp1 : bl <= p_tp1
+                bool slx = dir == 1 ? bl <= p_sl : bh >= p_sl
+                bool tp4 = false
+                bool sl4 = false
+                if fill_now
+                    int aff = f_after_fill(dir == 1, p_lim, p_tp1, p_sl, m0, m1, bh, bl)
+                    tp4 := aff == 1
+                    sl4 := aff == 2
+                    if tpx and not e_virt
+                        if m1 > m0
+                            c_1m += 1
+                        else
+                            c_no1m += 1
+                else
+                    bool both = enable_entry_wait_eff and tpx and slx
+                    int  ff   = both ? f_first(dir == 1, p_tp1, p_sl, m0, m1) : 0
+                    tp4 := tpx and (not both or ff == 1)
+                    sl4 := slx and not tp4
+                    if both and not e_virt
+                        if ff == 0
+                            c_no1m += 1
+                        else
+                            c_1m += 1
+                if tp4 or sl4
+                    if e_virt
+                        c_hb += 1   // [v1.1] 👻: سكّرت بصمت
+                    else
+                        float pts = tp4 ? f_tp_pts(p_tp1, last_sig_px, dir) : f_sl_pts(p_sl, last_sig_px, dir)
+                        array.push(tr_t, e_time)
+                        array.push(tr_set, e_set_t)
+                        array.push(tr_net, f_net(pts))
+                        array.push(tr_buy, dir == 1)
+                        array.push(tr_kind, e_kind)
+                        c_tp       += tp4 ? 1 : 0
+                        c_sl       += tp4 ? 0 : 1
+                        day_sl_cnt += tp4 ? 0 : 1
+                    state    := 0
+                    do_clean := true
+
+        // ── CLEANUP
+        if do_clean
+            trade_entry_bar := na
+            wait_start_bar  := na
+
+        gidx += 1
+
+// ═══════════════════════════════════════════════
+// الجدول
+// ═══════════════════════════════════════════════
+color BG     = color.new(#1a1200, 85)
+color GOLD_B = color.rgb(255, 223, 50)
+color GOLD_M = color.rgb(212, 175, 55)
+color TRANSP = color.new(#000000, 100)
+color INFO   = color.rgb(200, 200, 255)
+color GRAY   = color.rgb(200, 200, 200)
+var table rep = na
+
+if barstate.islast
+    if timeframe.in_seconds(sig_tf) >= timeframe.in_seconds(timeframe.period)
+        runtime.error("فريم الإشارة لازم يكون أصغر من فريم الشارت. حط الشارت على 4h.")
+
+    tsz = tbl_size_in == "Tiny" ? size.tiny : tbl_size_in == "Normal" ? size.normal : size.small
+    tps = tbl_pos_in == "أعلى يمين" ? position.top_right : tbl_pos_in == "أعلى يسار" ? position.top_left : tbl_pos_in == "أسفل يمين" ? position.bottom_right : position.bottom_left
+
+    array<int>   gk   = array.new<int>()
+    array<int>   gtr  = array.new<int>()
+    array<int>   gw   = array.new<int>()
+    array<int>   gl   = array.new<int>()
+    array<float> gnet = array.new<float>()
+    array<float> gws  = array.new<float>()
+    array<float> gls  = array.new<float>()
+
+    int   T_tr = 0, T_w = 0, T_l = 0
+    float T_net = 0.0, T_ws = 0.0, T_ls = 0.0, T_ss = 0.0
+    // سلاسل الربح والخسارة + أقصى تراجع، بترتيب الصفقات
+    int   s_cw = 0
+    int   s_cl = 0
+    int   s_mw = 0
+    int   s_ml = 0
+    float s_eq = 0.0
+    float s_pk = 0.0
+    float s_dd = 0.0
+
+    int nt = array.size(tr_t)
+    if nt > 0
+        for i = 0 to nt - 1
+            int   tt = array.get(tr_t, i)
+            float nn = array.get(tr_net, i)
+            bool  bb = array.get(tr_buy, i)
+            T_tr += 1
+            T_net += nn
+            T_ss += nn * nn
+            if nn > 0
+                T_w += 1
+                T_ws += nn
+            else if nn < 0
+                T_l += 1
+                T_ls += math.abs(nn)
+            if nn > 0
+                s_cw += 1
+                s_cl := 0
+                s_mw := math.max(s_mw, s_cw)
+            else if nn < 0
+                s_cl += 1
+                s_cw := 0
+                s_ml := math.max(s_ml, s_cl)
+            s_eq += nn
+            s_pk := math.max(s_pk, s_eq)
+            s_dd := math.max(s_dd, s_pk - s_eq)
+            int k   = f_gkey(tt, bb, array.get(tr_kind, i), array.get(tr_set, i))
+            int idx = -1
+            if array.size(gk) > 0
+                for j = 0 to array.size(gk) - 1
+                    if array.get(gk, j) == k
+                        idx := j
+                        break
+            if idx == -1
+                array.push(gk, k)
+                array.push(gtr, 0)
+                array.push(gw, 0)
+                array.push(gl, 0)
+                array.push(gnet, 0.0)
+                array.push(gws, 0.0)
+                array.push(gls, 0.0)
+                idx := array.size(gk) - 1
+            array.set(gtr, idx, array.get(gtr, idx) + 1)
+            array.set(gnet, idx, array.get(gnet, idx) + nn)
+            if nn > 0
+                array.set(gw, idx, array.get(gw, idx) + 1)
+                array.set(gws, idx, array.get(gws, idx) + nn)
+            else if nn < 0
+                array.set(gl, idx, array.get(gl, idx) + 1)
+                array.set(gls, idx, array.get(gls, idx) + math.abs(nn))
+
+    int ng = array.size(gk)
+    // الانحراف المعياري لربح الصفقة (لحساب z)
+    float T_mean = T_tr > 0 ? T_net / T_tr : 0.0
+    float T_sd   = T_tr > 1 ? math.sqrt(math.max((T_ss - T_tr * T_mean * T_mean) / (T_tr - 1), 0.0)) : 0.0
+    array<int> ord = ng > 0 ? array.sort_indices(gk, order.ascending) : array.new<int>()
+
+    table.delete(rep)
+    rep := table.new(tps, 7, ng + 10, bgcolor=BG, border_width=1, border_color=GOLD_M, frame_width=2, frame_color=GOLD_M)
+
+    table.cell(rep, 0, 0, group_by, text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 1, 0, "Tr",   text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 2, 0, "W",    text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 3, 0, "L",    text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 4, 0, "Win%", text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 5, 0, "Net$", text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 6, 0, "PF",   text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
+
+    if ng > 0
+        for r = 0 to ng - 1
+            int   p   = array.get(ord, r)
+            int   trc = array.get(gtr, p)
+            int   wc  = array.get(gw, p)
+            int   lc  = array.get(gl, p)
+            float nv  = array.get(gnet, p)
+            float ws  = array.get(gws, p)
+            float ls  = array.get(gls, p)
+            float wr  = trc > 0 ? (wc / trc) * 100 : 0
+            float pf  = ls > 0 ? ws / ls : na
+            int row = r + 1
+            // z = (متوسط ربح صفقات السطر − متوسط الباقي) ÷ الخطأ المعياري. |z| ≥ 3 = الفرق حقيقي، 2–3 = ممكن صدفة
+            int   n_o = T_tr - trc
+            float zr  = trc >= 20 and n_o >= 20 and T_sd > 0 ? (nv / trc - (T_net - nv) / n_o) / (T_sd * math.sqrt(1.0 / trc + 1.0 / n_o)) : na
+            color zbg = na(zr) ? TRANSP : zr <= -3 ? color.new(color.red, 25) : zr <= -2 ? color.new(color.red, 65) : zr >= 3 ? color.new(color.green, 25) : zr >= 2 ? color.new(color.green, 65) : TRANSP
+            string ztp = na(zr) ? "صفقات قليلة للحكم" : "z " + str.tostring(zr, "#.#") + (math.abs(zr) >= 3 ? " · حقيقي" : math.abs(zr) >= 2 ? " · ممكن صدفة" : " · عادي")
+            table.cell(rep, 0, row, f_glabel(array.get(gk, p)), text_color=color.rgb(220,220,220), text_size=tsz, bgcolor=zbg, tooltip=ztp)
+            table.cell(rep, 1, row, str.tostring(trc), text_color=GRAY, text_size=tsz, bgcolor=TRANSP)
+            table.cell(rep, 2, row, str.tostring(wc), text_color=color.lime, text_size=tsz, bgcolor=TRANSP)
+            table.cell(rep, 3, row, str.tostring(lc), text_color=color.red, text_size=tsz, bgcolor=TRANSP)
+            table.cell(rep, 4, row, str.tostring(wr, "#.#") + "%", text_color=color.rgb(59,209,255), text_size=tsz, bgcolor=TRANSP)
+            table.cell(rep, 5, row, (nv >= 0 ? "+" : "") + str.tostring(nv, "#.##"), text_color=nv >= 0 ? color.lime : color.red, text_size=tsz, bgcolor=TRANSP)
+            table.cell(rep, 6, row, na(pf) ? "-" : str.tostring(pf, "#.##"), text_color=na(pf) ? color.gray : pf >= 1 ? color.lime : color.red, text_size=tsz, bgcolor=TRANSP)
+
+    int   trow = ng + 1
+    float T_wr = T_tr > 0 ? (T_w / T_tr) * 100 : 0
+    float T_pf = T_ls > 0 ? T_ws / T_ls : na
+    float zT   = T_tr > 1 and T_sd > 0 ? T_mean / (T_sd / math.sqrt(T_tr)) : na
+    color TBG  = color.new(#3a2a00, 60)
+    table.cell(rep, 0, trow, "TOTAL", text_color=GOLD_B, text_size=tsz, bgcolor=TBG, tooltip=na(zT) ? "" : "z " + str.tostring(zT, "#.#") + (zT >= 3 ? " · الربح حقيقي" : " · الربح ممكن يكون صدفة"))
+    table.cell(rep, 1, trow, str.tostring(T_tr), text_color=GOLD_B, text_size=tsz, bgcolor=TBG)
+    table.cell(rep, 2, trow, str.tostring(T_w), text_color=color.lime, text_size=tsz, bgcolor=TBG)
+    table.cell(rep, 3, trow, str.tostring(T_l), text_color=color.red, text_size=tsz, bgcolor=TBG)
+    table.cell(rep, 4, trow, str.tostring(T_wr, "#.#") + "%", text_color=color.rgb(59,209,255), text_size=tsz, bgcolor=TBG)
+    table.cell(rep, 5, trow, (T_net >= 0 ? "+" : "") + str.tostring(T_net, "#.##"), text_color=T_net >= 0 ? color.lime : color.red, text_size=tsz, bgcolor=TBG)
+    table.cell(rep, 6, trow, na(T_pf) ? "-" : str.tostring(T_pf, "#.##"), text_color=na(T_pf) ? color.gray : T_pf >= 1 ? color.lime : color.red, text_size=tsz, bgcolor=TBG)
+
+    // سطر Exits: TP و SL، وكم حالة حسمتها شموع الدقيقة، وكم حالة ما إلها دقيقة (متل المؤشر: ستوب)
+    int xrow = ng + 2
+    table.cell(rep, 0, xrow, "Exits", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 1, xrow, "TP " + str.tostring(c_tp), text_color=GRAY, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 2, xrow, "SL " + str.tostring(c_sl), text_color=GRAY, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 3, xrow, "1m ✓", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP, tooltip="شمعة التنفيذ أو شمعة فيها الهدف والستوب سوا، وحسمتها شموع الدقيقة")
+    table.cell(rep, 4, xrow, str.tostring(c_1m), text_color=GRAY, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 5, xrow, "بلا 1m", text_color=color.orange, text_size=tsz, bgcolor=TRANSP, tooltip="نفس الحالات بس أقدم من شموع الدقيقة (~70 يوم): متل المؤشر، الستوب بينحسب أول، والهدف بشمعة التنفيذ ما بينحسب")
+    table.cell(rep, 6, xrow, str.tostring(c_no1m), text_color=color.orange, text_size=tsz, bgcolor=TRANSP)
+
+    // سطر Orders: الأوامر المعلّقة (Wait)
+    int orow = ng + 3
+    table.cell(rep, 0, orow, "Orders", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
+    if enable_entry_wait_eff
+        table.cell(rep, 1, orow, "📍 " + str.tostring(c_ord), text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="أوامر معلّقة انبعتت")
+        table.cell(rep, 2, orow, "✅ " + str.tostring(c_fill), text_color=color.lime, text_size=tsz, bgcolor=TRANSP, tooltip="أوامر اتنفّذت")
+        table.cell(rep, 3, orow, "MKT " + str.tostring(c_mkt), text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="إغلاق شمعة الكسر كان أصلاً واصل لسعر الأمر: دخول ماركت")
+        table.cell(rep, 4, orow, "✂🎯 " + str.tostring(c_xtp), text_color=GRAY, text_size=tsz, bgcolor=TRANSP, tooltip="إلغاء: الهدف انضرب قبل التنفيذ")
+        table.cell(rep, 5, orow, "✂⏳ " + str.tostring(c_xwt), text_color=GRAY, text_size=tsz, bgcolor=TRANSP, tooltip="إلغاء: خلص وقت الانتظار")
+        table.cell(rep, 6, orow, "✂SL " + str.tostring(c_xsl), text_color=GRAY, text_size=tsz, bgcolor=TRANSP, tooltip="إلغاء: السعر لورا الستوب")
+    else
+        table.cell(rep, 1, orow, "Direct", text_color=INFO, text_size=tsz, bgcolor=TRANSP)
+
+    int drow = ng + 4
+    table.cell(rep, 0, drow, "Data", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 1, drow, na(first_t) ? "-" : str.format("{0,date,dd/MM/yy}", first_t), text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 2, drow, "→", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 3, drow, na(last_t) ? "-" : str.format("{0,date,dd/MM/yy}", last_t), text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 4, drow, "from", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 5, drow, str.format("{0,date,dd/MM/yy}", start_date), text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 6, drow, sig_tf + "→" + timeframe.period, text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
+
+    string zone_s = eff_entry_mode == "Swap Zone (23.6-38.2%)" ? "Swap" : eff_entry_mode == "Best Entry (50-61.8%)" ? "Best" : "Deep"
+    string pos_s  = wait_lim_pos == "الطرف البعيد" ? "بعيد" : wait_lim_pos == "نص المنطقة" ? "نص" : "قريب"
+    int srow = ng + 5
+    table.cell(rep, 0, srow, "Setup", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 1, srow, enable_entry_wait_eff ? "Wait" : "Direct", text_color=INFO, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 2, srow, "IB " + str.tostring(eff_lookback), text_color=INFO, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 3, srow, enable_entry_wait_eff ? zone_s + " " + pos_s : "IB close", text_color=INFO, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 4, srow, "SL " + eff_sl_fib_str, text_color=color.red, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 5, srow, "TP " + str.tostring(eff_tp1_fib, "#.#"), text_color=#0cb112, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 6, srow, "cost " + str.tostring(trade_cost_usd, "#.##"), text_color=GRAY, text_size=tsz, bgcolor=TRANSP)
+
+    int frow = ng + 6
+    table.cell(rep, 0, frow, "Filters", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 1, frow, eff_enable_min ? "min " + str.tostring(eff_min_target, "#.##") : "min off", text_color=INFO, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 2, frow, eff_enable_max ? "max " + str.tostring(eff_max_tp, "#.##") + "/" + str.tostring(eff_max_sl, "#.##") : "max off", text_color=INFO, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 3, frow, enable_entry_wait_eff ? "⏳ " + str.tostring(max_wait_bars) : use_direct_pretrend_filter ? "pre " + str.tostring(direct_pretrend_bars) : "pre off", text_color=INFO, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 4, frow, eff_enable_dom ? "DOM " + str.tostring(eff_dom_mult, "#.##") + "/" + str.tostring(eff_body_ratio, "#.##") : "DOM off", text_color=INFO, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 5, frow, eff_enable_dom and eff_use_reset ? "reset" : "no reset", text_color=INFO, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 6, frow, use_sl_cap ? "SL cap " + str.tostring(sl_cap_n) : "SL cap off", text_color=INFO, text_size=tsz, bgcolor=TRANSP)
+
+    // [v1.1] سطر 🚫: الساعات الممنوعة (ساعة الإعداد) وكم صفقة شالت
+    int hrow = ng + 7
+    table.cell(rep, 0, hrow, "Hours", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 1, hrow, hb_on ? "🚫 " + array.join(bh_list, ",") : enable_hour_block ? "🚫 ?" : "🚫 off", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="ساعة الإعداد (كسر IB) بتوقيت البورصة")
+    table.cell(rep, 2, hrow, hb_on ? "✂ " + str.tostring(c_hb) : "-", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="كم صفقة (مسكّرة) شالها الفلتر")
+
+    // [v1.2] سطر 🛡🧭: الفلترين وكم إعداد لغوا
+    int vrow = ng + 8
+    table.cell(rep, 0, vrow, "v1.2", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 1, vrow, use_base_guard ? "🛡 on" : "🛡 off", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="حارس القاعدة")
+    table.cell(rep, 2, vrow, use_base_guard ? "✂ " + str.tostring(c_xbase) : "-", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="كم إعداد انلغى لأن شمعة سكّرت ورا القاعدة")
+    table.cell(rep, 3, vrow, use_day_bias ? "🧭 on" : "🧭 off", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="اتجاه اليوم")
+    table.cell(rep, 4, vrow, use_day_bias ? "✂ " + str.tostring(c_xbias) : "-", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="كم كسر انرفض لأنه سكّر ضد افتتاح اليوم")
+
+    // سطر Streak: أطول سلسلة ربح وخسارة، السلسلة الحالية، أقصى تراجع، والربح ÷ التراجع
+    int krow = ng + 9
+    table.cell(rep, 0, krow, "Streak", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 1, krow, "🟢 max " + str.tostring(s_mw), text_color=color.lime, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 2, krow, "🔴 max " + str.tostring(s_ml), text_color=color.red, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 3, krow, s_cw > 0 ? "now " + str.tostring(s_cw) + "🟢" : s_cl > 0 ? "now " + str.tostring(s_cl) + "🔴" : "now -", text_color=GRAY, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 4, krow, "Max DD", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 5, krow, "-" + str.tostring(s_dd, "#.##"), text_color=color.red, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 6, krow, s_dd > 0 ? "Net/DD " + str.tostring(T_net / s_dd, "#.#") : "Net/DD -", text_color=GRAY, text_size=tsz, bgcolor=TRANSP)
