@@ -8,7 +8,11 @@
 //   بينحسب متل المؤشر بلا بيانات (ستوب)، وعدد هالحالات بسطر Exits («بلا 1m»).
 // v1.1: + 🚫 منع ساعات الدخول (بآخر الإعدادات، مطفي افتراضياً). بيحكم على ساعة الإعداد: شمعة كسر IB = وقت إرسال الأمر المعلّق.
 //       الإعداد الممنوع بيمشي بالمحرك متل العادة (👻) وما بينحسب، فالنتيجة = المجموع ناقص سطور «ساعة الإعداد» هي بالظبط.
-indicator("🟢Daily gold — أداة السنة v1.1", overlay = true)
+// v1.2: + فلترين (بآخر الإعدادات، مطفيين افتراضياً = نفس نتيجة v1.1). بيشتغلوا متل فلاتر المؤشر (Pre-Trend): الإعداد بينلغى
+//       فعلاً والمحرك بيرجع يدوّر، فما في «المجموع ناقص سطور»: قارن تشغيلتين (مطفي/شغّال) بـ Group by «سنة».
+//       🛡 حارس القاعدة: شمعة سكّرت ورا قاعدة الشمعة الحاكمة قبل الكسر = الإعداد ميّت، بينلغى (ونفس الشمعة بتقدر تبلّش إعداد جديد).
+//       🧭 اتجاه اليوم: الكسر لازم يسكّر بجهة افتتاح اليوم (شراء فوقه، بيع تحته).
+indicator("🟢Daily gold — أداة السنة v1.2", overlay = true)
 
 // ═══════════════════════════════════════════════
 // 1) الفريم
@@ -77,6 +81,13 @@ enable_hour_block = input.bool(false, "🚫 منع ساعات الدخول", too
 blocked_hours     = input.string("", "🚫 الساعات (مثال: 6,2)", tooltip="أي فاصل بيمشي: 6,2 أو 6،2 أو 6.2 أو 6 2", group=g_hb)
 
 // ═══════════════════════════════════════════════
+// 5) [v1.2] فلترين (كمان بآخر الإعدادات، نفس السبب)
+// ═══════════════════════════════════════════════
+g_v12          = "🛡🧭 فلاتر v1.2"
+use_base_guard = input.bool(false, "🛡 حارس القاعدة (Base Guard)", tooltip="وإنت ناطر الكسر: إذا شمعة سكّرت تحت قاعدة الشمعة الحاكمة (للشراء، أو فوقها للبيع)، الإعداد ميّت وبينلغى. بلاه، الإعداد بيضل شغّال ولو السعر كسر القاعدة، ولما يجي الكسر بيطلع ستوب الـ Wait على مستوى انكسر أصلاً، وبـ Direct ممكن يطلع ستوب صغير كتير (5% من المدى). الذيل لحالو ما بيلغي، بس الإغلاق. نفس الشمعة بتقدر تبلّش إعداد جديد إذا كانت حاكمة.", group=g_v12)
+use_day_bias   = input.bool(false, "🧭 اتجاه اليوم (Day Bias)", tooltip="على شمعة الكسر: الشراء بس إذا سكّرت فوق افتتاح اليوم، والبيع بس تحته. افتتاح اليوم = أول شمعة بيوم التداول تبع الرمز (FXCM: الساعة 17:00 نيويورك). ما إلو أرقام، فبيمشي نفس الشي على 1,800$ وعلى 4,000$. للـ Direct والـ Wait.", group=g_v12)
+
+// ═══════════════════════════════════════════════
 // القيم الفعّالة (متل المؤشر)
 // ═══════════════════════════════════════════════
 eff_enable_dom = enable_entry_wait_eff ? wait_enable_dom : direct_enable_dom
@@ -142,13 +153,13 @@ f_sl_pts(float _sl, float _entry, int _dir) =>
     math.min(_raw, -0.01)
 
 // ═══════════════════════════════════════════════
-// قراءة شموع فريم الإشارة (+ اللي بيحتاج تاريخها: متوسط الجسم، قمة/قاع IB، حركة Pre-Trend)
+// قراءة شموع فريم الإشارة (+ اللي بيحتاج تاريخها: متوسط الجسم، قمة/قاع IB، حركة Pre-Trend، [v1.2] افتتاح اليوم)
 // ═══════════════════════════════════════════════
 f_feed() =>
     float _b = math.abs(close - open)
-    [open, high, low, close, time, ta.sma(_b, 20), ta.highest(high[1], eff_lookback), ta.lowest(low[1], eff_lookback), close[1] - close[direct_pretrend_bars]]
+    [open, high, low, close, time, ta.sma(_b, 20), ta.highest(high[1], eff_lookback), ta.lowest(low[1], eff_lookback), close[1] - close[direct_pretrend_bars], ta.valuewhen(timeframe.change("D"), open, 0)]
 
-[a_o, a_h, a_l, a_c, a_t, a_ab, a_ibh, a_ibl, a_pm] = request.security_lower_tf(syminfo.tickerid, sig_tf, f_feed())
+[a_o, a_h, a_l, a_c, a_t, a_ab, a_ibh, a_ibl, a_pm, a_dop] = request.security_lower_tf(syminfo.tickerid, sig_tf, f_feed())
 
 // شموع الدقيقة (آخر ~70 يوم): ترتيب الأحداث جوّا شمعة فريم الإشارة
 [m_t, m_h, m_l] = request.security_lower_tf(syminfo.tickerid, "1", [time, high, low])
@@ -266,6 +277,8 @@ var int   c_xsl   = 0        // إلغاء: السعر لورا الستوب
 var int   e_set_t = na       // [v1.1] وقت شمعة الإعداد (كسر IB)
 var bool  e_virt  = false    // [v1.1] الإعداد بساعة ممنوعة: بيمشي بالمحرك وما بينحسب (👻)
 var int   c_hb    = 0        // [v1.1] كم صفقة (مسكّرة) شالها 🚫
+var int   c_xbase = 0        // [v1.2] كم إعداد لغاه 🛡
+var int   c_xbias = 0        // [v1.2] كم إعداد رفضه 🧭
 
 var array<int>   tr_t    = array.new<int>()
 var array<float> tr_net  = array.new<float>()
@@ -292,6 +305,7 @@ if barstate.isconfirmed and n_ib > 0
         float ibh = array.get(a_ibh, i)
         float ibl = array.get(a_ibl, i)
         float pmv = array.get(a_pm, i)
+        float dop = array.get(a_dop, i)
 
         if na(first_t)
             first_t := bt
@@ -330,6 +344,13 @@ if barstate.isconfirmed and n_ib > 0
         bool fill_now = false
         bool mkt_now  = false
         bool do_clean = false
+
+        // ── [v1.2] 🛡 حارس القاعدة: إغلاق ورا القاعدة وإنت ناطر الكسر = الإعداد ميّت
+        //    قبل STATE 0 عن قصد: نفس الشمعة بتقدر تبلّش إعداد جديد إذا كانت حاكمة
+        if use_base_guard and state == 1 and not na(v_base) and (dir == 1 ? bc < v_base : bc > v_base)
+            state    := 0
+            do_clean := true
+            c_xbase  += 1
 
         // ── STATE 0 - IDLE
         if state == 0
@@ -382,9 +403,15 @@ if barstate.isconfirmed and n_ib > 0
                     bool pre_ok = true
                     if is_direct and use_direct_pretrend_filter
                         pre_ok := na(pmv) ? true : dir == 1 ? pmv > 0 : pmv < 0
+                    // [v1.2] 🧭 اتجاه اليوم: الكسر لازم يسكّر بجهة افتتاح اليوم
+                    bool bias_ok = not use_day_bias or na(dop) or (dir == 1 ? bc > dop : bc < dop)
                     if is_direct and not pre_ok
                         state    := 0
                         do_clean := true
+                    else if not bias_ok
+                        state    := 0
+                        do_clean := true
+                        c_xbias  += 1
                     else if enable_entry_wait_eff
                         state          := 5
                         p_lim          := lim0
@@ -580,7 +607,7 @@ if barstate.islast
     array<int> ord = ng > 0 ? array.sort_indices(gk, order.ascending) : array.new<int>()
 
     table.delete(rep)
-    rep := table.new(tps, 7, ng + 9, bgcolor=BG, border_width=1, border_color=GOLD_M, frame_width=2, frame_color=GOLD_M)
+    rep := table.new(tps, 7, ng + 10, bgcolor=BG, border_width=1, border_color=GOLD_M, frame_width=2, frame_color=GOLD_M)
 
     table.cell(rep, 0, 0, group_by, text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
     table.cell(rep, 1, 0, "Tr",   text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
@@ -686,8 +713,16 @@ if barstate.islast
     table.cell(rep, 1, hrow, hb_on ? "🚫 " + array.join(bh_list, ",") : enable_hour_block ? "🚫 ?" : "🚫 off", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="ساعة الإعداد (كسر IB) بتوقيت البورصة")
     table.cell(rep, 2, hrow, hb_on ? "✂ " + str.tostring(c_hb) : "-", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="كم صفقة (مسكّرة) شالها الفلتر")
 
+    // [v1.2] سطر 🛡🧭: الفلترين وكم إعداد لغوا
+    int vrow = ng + 8
+    table.cell(rep, 0, vrow, "v1.2", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 1, vrow, use_base_guard ? "🛡 on" : "🛡 off", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="حارس القاعدة")
+    table.cell(rep, 2, vrow, use_base_guard ? "✂ " + str.tostring(c_xbase) : "-", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="كم إعداد انلغى لأن شمعة سكّرت ورا القاعدة")
+    table.cell(rep, 3, vrow, use_day_bias ? "🧭 on" : "🧭 off", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="اتجاه اليوم")
+    table.cell(rep, 4, vrow, use_day_bias ? "✂ " + str.tostring(c_xbias) : "-", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="كم كسر انرفض لأنه سكّر ضد افتتاح اليوم")
+
     // سطر Streak: أطول سلسلة ربح وخسارة، السلسلة الحالية، أقصى تراجع، والربح ÷ التراجع
-    int krow = ng + 8
+    int krow = ng + 9
     table.cell(rep, 0, krow, "Streak", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
     table.cell(rep, 1, krow, "🟢 max " + str.tostring(s_mw), text_color=color.lime, text_size=tsz, bgcolor=TRANSP)
     table.cell(rep, 2, krow, "🔴 max " + str.tostring(s_ml), text_color=color.red, text_size=tsz, bgcolor=TRANSP)
