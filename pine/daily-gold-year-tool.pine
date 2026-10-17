@@ -8,10 +8,7 @@
 //   بينحسب متل المؤشر بلا بيانات (ستوب)، وعدد هالحالات بسطر Exits («بلا 1m»).
 // v1.1: + 🚫 منع ساعات الدخول (بآخر الإعدادات، مطفي افتراضياً). بيحكم على ساعة الإعداد: شمعة كسر IB = وقت إرسال الأمر المعلّق.
 //       الإعداد الممنوع بيمشي بالمحرك متل العادة (👻) وما بينحسب، فالنتيجة = المجموع ناقص سطور «ساعة الإعداد» هي بالظبط.
-// v1.2: + 🧪 فلاتر التحسين (أيام، ترند EMA، ADX، المدى÷ATR، ربح÷مخاطرة، قوة إغلاق الكسر، RSI، بلا ماركت) + End Date.
-//       كلها مطفية افتراضياً وبتحكم على شمعة الإعداد متل 🚫. الافتراضي 👻 متل 🚫، و«⛔ رفض» = متل لو الفلتر جوّا المؤشر.
-//       جدول 🧪 المختبر: شو بيشيل كل فلتر لحالو (حتى لو مطفي)، وشو بيصير بالـ Net والـ PF والتراجع لو شغّلتو.
-indicator("🟢Daily gold — أداة السنة v1.2", overlay = true)
+indicator("🟢Daily gold — أداة السنة v1.1", overlay = true)
 
 // ═══════════════════════════════════════════════
 // 1) الفريم
@@ -80,38 +77,6 @@ enable_hour_block = input.bool(false, "🚫 منع ساعات الدخول", too
 blocked_hours     = input.string("", "🚫 الساعات (مثال: 6,2)", tooltip="أي فاصل بيمشي: 6,2 أو 6،2 أو 6.2 أو 6 2", group=g_hb)
 
 // ═══════════════════════════════════════════════
-// 5) [v1.2] فلاتر التحسين + 🧪 المختبر (كمان بآخر الإعدادات، نفس السبب)
-//    كلها بتحكم على شمعة الإعداد (كسر IB) بقيم فريم الإشارة، فما في نظر للمستقبل
-// ═══════════════════════════════════════════════
-g_fl          = "🧪 فلاتر التحسين (على شمعة الإعداد)"
-flt_mode      = input.string("👻 قياس", "طريقة الفلترة", options=["👻 قياس", "⛔ رفض"], group=g_fl, tooltip="👻 قياس: متل 🚫، الإعداد المشال بيمشي بالمحرك وما بينحسب، فالنتيجة = المجموع ناقص الصفقات المشالة بالظبط، والمختبر بيقيس كل فلتر لحالو. ⛔ رفض: متل لو الفلتر جوّا المؤشر: الإعداد بينلغى فوراً والمحرك بيرجع يدوّر على شمعة حاكمة جديدة (أقرب للتداول الحقيقي، بس المختبر ما بيعود يقيس الفلاتر المفعّلة). 🚫 الساعات كمان بتمشي على هالطريقة.")
-fd_on         = input.bool(false, "📅 منع أيام", inline="fd", group=g_fl)
-blocked_days  = input.string("", "", inline="fd", group=g_fl, tooltip="Fri أو Friday أو جمعة أو أرقام 1..7 (1 = Sun) متل جدول «يوم الأسبوع». أي فاصل بيمشي. على يوم شمعة الإعداد بتوقيت البورصة.")
-flt_ema_on    = input.bool(false, "📈 ترند EMA", inline="fe", group=g_fl)
-flt_ema_len   = input.int(200, "طول", minval=2, inline="fe", group=g_fl)
-flt_ema_slope = input.int(0, "ميل", minval=0, inline="fe", group=g_fl, tooltip="شراء بس إذا إغلاق شمعة الكسر فوق الـ EMA (بيع: تحت)، على فريم الإشارة: 200 على 15m ≈ 50 على الساعة. ميل N > 0: كمان لازم الـ EMA يكون أعلى من قبل N شمعة (بيع: أوطى). 0 = بلا ميل.")
-flt_adx_on    = input.bool(false, "💪 ADX ≥", inline="fa", group=g_fl)
-flt_adx_min   = input.float(20.0, "", minval=0.0, step=1.0, inline="fa", group=g_fl)
-flt_adx_len   = input.int(14, "طول", minval=2, inline="fa", group=g_fl, tooltip="قوة الترند على شمعة الكسر. تحت الحد = سوق عرضي، والكسر فيه غالباً بيرجع.")
-flt_ratr_on   = input.bool(false, "📏 المدى ÷ ATR", inline="fr", group=g_fl)
-flt_ratr_min  = input.float(1.0, "من", minval=0.0, step=0.1, inline="fr", group=g_fl)
-flt_ratr_max  = input.float(4.0, "لـ", minval=0.0, step=0.1, inline="fr", group=g_fl)
-flt_atr_len   = input.int(14, "ATR", minval=1, inline="fr", group=g_fl, tooltip="المدى (قاعدة الشمعة الحاكمة ← طرف شمعة الكسر) ÷ ATR فريم الإشارة. نفس فكرة الحد الأدنى/الأقصى بالدولار، بس بيمشي مع سعر الدهب وتذبذبه: 10$ بـ2022 مش متل 10$ اليوم.")
-flt_rr_on     = input.bool(false, "⚖️ ربح ÷ مخاطرة ≥", inline="fq", group=g_fl)
-flt_rr_min    = input.float(0.6, "", minval=0.0, step=0.05, inline="fq", group=g_fl, tooltip="(الهدف − الدخول) ÷ (الدخول − الستوب) على سعر الدخول المخطّط. أهم شي لـ Direct: كل ما سكّرت شمعة الكسر أبعد، الهدف بيقرب والستوب بيبعد. بـ Wait شبه ثابتة (Best قريب + TP 110 + SL 0% = 0.78).")
-flt_cpos_on   = input.bool(false, "🕯 إغلاق الكسر ≥", inline="fc", group=g_fl)
-flt_cpos_min  = input.float(0.6, "", minval=0.0, maxval=1.0, step=0.05, inline="fc", group=g_fl, tooltip="وين سكّرت شمعة الكسر من مداها: 1 = عالقمة (بيع: عالقاع)، 0.5 = بالنص. إغلاق ضعيف = ذيل طويل ضد الاتجاه = رفض للكسر.")
-flt_rsi_on    = input.bool(false, "🌡 RSI مش أكتر من", inline="fs", group=g_fl)
-flt_rsi_max   = input.float(75.0, "", minval=50.0, maxval=100.0, step=1.0, inline="fs", group=g_fl)
-flt_rsi_len   = input.int(14, "طول", minval=2, inline="fs", group=g_fl, tooltip="منع المطاردة: ما في شراء إذا RSI فوق الحد على شمعة الكسر، ولا بيع إذا تحت (100 − الحد).")
-flt_mkt_on    = input.bool(false, "🛒 بلا دخول ماركت (Wait)", group=g_fl, tooltip="إغلاق شمعة الكسر أصلاً واصل لسعر الأمر = ذيل كبير ضد الاتجاه. شوف أول بـ Group by «نوع الدخول» إذا Market أسوأ من Limit.")
-
-g_lab      = "🧪 المختبر"
-show_lab   = input.bool(true, "🧪 جدول المختبر", inline="lb", group=g_lab)
-lab_pos_in = input.string("أسفل يسار", "", options=["أعلى يمين", "أعلى يسار", "أسفل يمين", "أسفل يسار"], inline="lb", group=g_lab)
-end_date   = input.time(timestamp("31 Dec 2099 00:00 +0000"), "End Date", group=g_lab, tooltip="ما في إعدادات جديدة بعد هالتاريخ. للتحقق من الفلاتر: اختارها على فترة (مثلاً لآخر 2024 بـ End Date)، وبعدين جرّبها بدون أي تغيير على الفترة اللي بعدها (Start Date). إذا ما صمدت، كانت صدفة.")
-
-// ═══════════════════════════════════════════════
 // القيم الفعّالة (متل المؤشر)
 // ═══════════════════════════════════════════════
 eff_enable_dom = enable_entry_wait_eff ? wait_enable_dom : direct_enable_dom
@@ -143,38 +108,6 @@ for tok in bh_tok
     if not na(hv) and hv >= 0 and hv <= 23
         array.push(bh_list, int(hv))
 bool hb_on = enable_hour_block and array.size(bh_list) > 0
-
-// [v1.2] الأيام الممنوعة: رقم 1..7 (1 = Sun)، أو اسم إنكليزي (Fri / Friday)، أو عربي (جمعة)
-f_day_num(string _s) =>
-    float _v = str.tonumber(_s)
-    int   _d = 0
-    if not na(_v)
-        _d := _v >= 1 and _v <= 7 ? int(_v) : 0
-    else if str.startswith(_s, "sun") or str.contains(_s, "حد")
-        _d := 1
-    else if str.startswith(_s, "mon") or str.contains(_s, "ثنين") or str.contains(_s, "تنين")
-        _d := 2
-    else if str.startswith(_s, "tue") or str.contains(_s, "ثلاث") or str.contains(_s, "تلات")
-        _d := 3
-    else if str.startswith(_s, "wed") or str.contains(_s, "ربع")
-        _d := 4
-    else if str.startswith(_s, "thu") or str.contains(_s, "خميس")
-        _d := 5
-    else if str.startswith(_s, "fri") or str.contains(_s, "جمع")
-        _d := 6
-    else if str.startswith(_s, "sat") or str.contains(_s, "سبت")
-        _d := 7
-    _d
-
-string bd_norm = str.lower(str.replace_all(str.replace_all(str.replace_all(str.replace_all(blocked_days, "،", ","), ".", ","), ";", ","), " ", ","))
-array<string> bd_tok = str.split(bd_norm, ",")
-array<int> bd_list = array.new<int>()
-for dtok in bd_tok
-    int dn = f_day_num(dtok)
-    if dn > 0 and not array.includes(bd_list, dn)
-        array.push(bd_list, dn)
-bool fd_ok    = fd_on and array.size(bd_list) > 0
-bool flt_hard = flt_mode == "⛔ رفض"
 
 // ═══════════════════════════════════════════════
 // دوال المؤشر (نفس الحساب)
@@ -208,34 +141,14 @@ f_sl_pts(float _sl, float _entry, int _dir) =>
     float _raw = _dir == 1 ? _sl - _entry : _entry - _sl
     math.min(_raw, -0.01)
 
-// [v1.2] فلاتر شمعة الإعداد. الماسك فيه كل الفلاتر (مفعّلة أو لأ) للمختبر، والتاني = فلتر مفعّل شال الإعداد
-//   البِتّات: 1 ساعات · 2 أيام · 4 EMA · 8 ADX · 16 المدى÷ATR · 32 ربح÷مخاطرة · 64 إغلاق الكسر · 128 RSI · 256 ماركت
-f_flags(int _dir, int _t, float _h, float _l, float _c, float _rng, float _fe, float _tp, float _sl, bool _mkt, float _ema, float _emas, float _adx, float _atr, float _rsi) =>
-    bool  _hr   = array.includes(bh_list, hour(_t, syminfo.timezone))
-    bool  _dy   = array.includes(bd_list, dayofweek(_t, syminfo.timezone))
-    bool  _tr   = not na(_ema) and (_dir == 1 ? (_c <= _ema or (flt_ema_slope > 0 and _emas <= 0)) : (_c >= _ema or (flt_ema_slope > 0 and _emas >= 0)))
-    bool  _ad   = not na(_adx) and _adx < flt_adx_min
-    float _ra   = not na(_atr) and _atr > 0 ? _rng / _atr : na
-    bool  _rg   = not na(_ra) and (_ra < flt_ratr_min or _ra > flt_ratr_max)
-    float _risk = math.abs(_fe - _sl)
-    bool  _rr   = _risk > 0 and math.abs(_tp - _fe) / _risk < flt_rr_min
-    float _cr   = _h - _l
-    bool  _cp   = _cr > 0 and (_dir == 1 ? _c - _l : _h - _c) / _cr < flt_cpos_min
-    bool  _rs   = not na(_rsi) and (_dir == 1 ? _rsi > flt_rsi_max : _rsi < 100 - flt_rsi_max)
-    int   _m    = (_hr ? 1 : 0) + (_dy ? 2 : 0) + (_tr ? 4 : 0) + (_ad ? 8 : 0) + (_rg ? 16 : 0) + (_rr ? 32 : 0) + (_cp ? 64 : 0) + (_rs ? 128 : 0) + (_mkt ? 256 : 0)
-    bool  _blk  = (hb_on and _hr) or (fd_ok and _dy) or (flt_ema_on and _tr) or (flt_adx_on and _ad) or (flt_ratr_on and _rg) or (flt_rr_on and _rr) or (flt_cpos_on and _cp) or (flt_rsi_on and _rs) or (flt_mkt_on and _mkt)
-    [_m, _blk]
-
 // ═══════════════════════════════════════════════
-// قراءة شموع فريم الإشارة (+ اللي بيحتاج تاريخها: متوسط الجسم، قمة/قاع IB، حركة Pre-Trend، ومؤشرات فلاتر v1.2)
+// قراءة شموع فريم الإشارة (+ اللي بيحتاج تاريخها: متوسط الجسم، قمة/قاع IB، حركة Pre-Trend)
 // ═══════════════════════════════════════════════
 f_feed() =>
     float _b = math.abs(close - open)
-    float _e = ta.ema(close, flt_ema_len)
-    [_dip, _dim, _adx] = ta.dmi(flt_adx_len, flt_adx_len)
-    [open, high, low, close, time, ta.sma(_b, 20), ta.highest(high[1], eff_lookback), ta.lowest(low[1], eff_lookback), close[1] - close[direct_pretrend_bars], _e, _e - _e[flt_ema_slope], _adx, ta.atr(flt_atr_len), ta.rsi(close, flt_rsi_len)]
+    [open, high, low, close, time, ta.sma(_b, 20), ta.highest(high[1], eff_lookback), ta.lowest(low[1], eff_lookback), close[1] - close[direct_pretrend_bars]]
 
-[a_o, a_h, a_l, a_c, a_t, a_ab, a_ibh, a_ibl, a_pm, a_ema, a_emas, a_adx, a_atr, a_rsi] = request.security_lower_tf(syminfo.tickerid, sig_tf, f_feed())
+[a_o, a_h, a_l, a_c, a_t, a_ab, a_ibh, a_ibl, a_pm] = request.security_lower_tf(syminfo.tickerid, sig_tf, f_feed())
 
 // شموع الدقيقة (آخر ~70 يوم): ترتيب الأحداث جوّا شمعة فريم الإشارة
 [m_t, m_h, m_l] = request.security_lower_tf(syminfo.tickerid, "1", [time, high, low])
@@ -351,56 +264,14 @@ var int   c_xtp   = 0        // إلغاء: الهدف قبل التنفيذ
 var int   c_xwt   = 0        // إلغاء: خلص الانتظار
 var int   c_xsl   = 0        // إلغاء: السعر لورا الستوب
 var int   e_set_t = na       // [v1.1] وقت شمعة الإعداد (كسر IB)
-var bool  e_virt  = false    // [v1.1] الإعداد بساعة ممنوعة: بيمشي بالمحرك وما بينحسب (👻) · [v1.2] أو أي فلتر مفعّل
-var int   c_hb    = 0        // [v1.1] كم صفقة (مسكّرة) شالها 🚫 · [v1.2] = صفقات بِت الساعات
-var int   e_mask  = 0        // [v1.2] ماسك فلاتر الإعداد (f_flags)
-var int   c_virt  = 0        // [v1.2] كم صفقة (مسكّرة) شالتها الفلاتر كلها (👻)
-var int   c_rej   = 0        // [v1.2] كم إعداد رفضتو الفلاتر (⛔)
+var bool  e_virt  = false    // [v1.1] الإعداد بساعة ممنوعة: بيمشي بالمحرك وما بينحسب (👻)
+var int   c_hb    = 0        // [v1.1] كم صفقة (مسكّرة) شالها 🚫
 
 var array<int>   tr_t    = array.new<int>()
 var array<float> tr_net  = array.new<float>()
 var array<bool>  tr_buy  = array.new<bool>()
 var array<int>   tr_kind = array.new<int>()
 var array<int>   tr_set  = array.new<int>()   // [v1.1] وقت شمعة الإعداد لكل صفقة
-
-// [v1.2] المختبر: كل صفقة مسكّرة، محسوبة أو 👻، بترتيبها
-var array<float> al_net  = array.new<float>()
-var array<int>   al_mask = array.new<int>()
-var array<bool>  al_virt = array.new<bool>()
-
-// [v1.2] إحصائيات المختبر بعد ما نشيل: _b > 0 = صفقات هالبِت، _b == 0 = المفعّل سوا (👻)، _b < 0 = ولا شي
-//   بيرجّع: [المشال: عدد، ربح، Net] + [الباقي: عدد، ربح، Net، مجموع الربح، مجموع الخسارة، أقصى تراجع]
-f_lab(int _b) =>
-    int   _nr = 0
-    int   _wr = 0
-    float _sr = 0.0
-    int   _nk = 0
-    int   _wk = 0
-    float _sk = 0.0
-    float _gw = 0.0
-    float _gl = 0.0
-    float _eq = 0.0
-    float _pk = 0.0
-    float _dd = 0.0
-    int   _n  = array.size(al_net)
-    if _n > 0
-        for _i = 0 to _n - 1
-            float _x  = array.get(al_net, _i)
-            bool  _rm = _b < 0 ? false : _b == 0 ? array.get(al_virt, _i) : int(array.get(al_mask, _i) / _b) % 2 == 1
-            if _rm
-                _nr += 1
-                _wr += _x > 0 ? 1 : 0
-                _sr += _x
-            else
-                _nk += 1
-                _wk += _x > 0 ? 1 : 0
-                _sk += _x
-                _gw += _x > 0 ? _x : 0.0
-                _gl += _x < 0 ? -_x : 0.0
-                _eq += _x
-                _pk := math.max(_pk, _eq)
-                _dd := math.max(_dd, _pk - _eq)
-    [_nr, _wr, _sr, _nk, _wk, _sk, _gw, _gl, _dd]
 
 // ═══════════════════════════════════════════════
 // المحرّك: كل شمعة فريم إشارة بالترتيب، بنفس ترتيب المؤشر
@@ -421,11 +292,6 @@ if barstate.isconfirmed and n_ib > 0
         float ibh = array.get(a_ibh, i)
         float ibl = array.get(a_ibl, i)
         float pmv = array.get(a_pm, i)
-        float emv = array.get(a_ema, i)
-        float ems = array.get(a_emas, i)
-        float adv = array.get(a_adx, i)
-        float atv = array.get(a_atr, i)
-        float rsv = array.get(a_rsi, i)
 
         if na(first_t)
             first_t := bt
@@ -467,7 +333,7 @@ if barstate.isconfirmed and n_ib > 0
 
         // ── STATE 0 - IDLE
         if state == 0
-            if bt >= start_date and bt < end_date and not (use_sl_cap and day_sl_cnt >= sl_cap_n)
+            if bt >= start_date and not (use_sl_cap and day_sl_cnt >= sl_cap_n)
                 if eff_enable_dom and dom_bull
                     state         := 1
                     dir           := 1
@@ -516,16 +382,9 @@ if barstate.isconfirmed and n_ib > 0
                     bool pre_ok = true
                     if is_direct and use_direct_pretrend_filter
                         pre_ok := na(pmv) ? true : dir == 1 ? pmv > 0 : pmv < 0
-                    // [v1.2] فلاتر التحسين (🚫 الساعات صارت منها)
-                    bool mk0 = not is_direct and (dir == 1 ? bc <= lim0 : bc >= lim0)
-                    [msk0, blk0] = f_flags(dir, bt, bh, bl, bc, v_range, fe, tpc, slc, mk0, emv, ems, adv, atv, rsv)
                     if is_direct and not pre_ok
                         state    := 0
                         do_clean := true
-                    else if blk0 and flt_hard
-                        state    := 0
-                        do_clean := true
-                        c_rej    += 1
                     else if enable_entry_wait_eff
                         state          := 5
                         p_lim          := lim0
@@ -533,8 +392,7 @@ if barstate.isconfirmed and n_ib > 0
                         last_sig_px    := bc
                         wait_start_bar := gidx
                         e_set_t        := bt
-                        e_mask         := msk0
-                        e_virt         := blk0
+                        e_virt         := hb_on and array.includes(bh_list, hour(bt, syminfo.timezone))
                         c_ord          += (mkt_now or e_virt) ? 0 : 1
                     else
                         state           := 4
@@ -543,8 +401,7 @@ if barstate.isconfirmed and n_ib > 0
                         e_time          := bt
                         e_kind          := 1
                         e_set_t         := bt
-                        e_mask          := msk0
-                        e_virt          := blk0
+                        e_virt          := hb_on and array.includes(bh_list, hour(bt, syminfo.timezone))
                 else
                     state    := 0
                     do_clean := true
@@ -606,15 +463,10 @@ if barstate.isconfirmed and n_ib > 0
                         else
                             c_1m += 1
                 if tp4 or sl4
-                    float pts = tp4 ? f_tp_pts(p_tp1, last_sig_px, dir) : f_sl_pts(p_sl, last_sig_px, dir)
-                    // [v1.2] كل صفقة مسكّرة بتروح عالمختبر، محسوبة أو 👻
-                    array.push(al_net, f_net(pts))
-                    array.push(al_mask, e_mask)
-                    array.push(al_virt, e_virt)
-                    c_hb += e_mask % 2 == 1 ? 1 : 0   // بِت الساعات
                     if e_virt
-                        c_virt += 1   // 👻: سكّرت بصمت
+                        c_hb += 1   // [v1.1] 👻: سكّرت بصمت
                     else
+                        float pts = tp4 ? f_tp_pts(p_tp1, last_sig_px, dir) : f_sl_pts(p_sl, last_sig_px, dir)
                         array.push(tr_t, e_time)
                         array.push(tr_set, e_set_t)
                         array.push(tr_net, f_net(pts))
@@ -643,7 +495,6 @@ color TRANSP = color.new(#000000, 100)
 color INFO   = color.rgb(200, 200, 255)
 color GRAY   = color.rgb(200, 200, 200)
 var table rep = na
-var table lab = na
 
 if barstate.islast
     if timeframe.in_seconds(sig_tf) >= timeframe.in_seconds(timeframe.period)
@@ -729,7 +580,7 @@ if barstate.islast
     array<int> ord = ng > 0 ? array.sort_indices(gk, order.ascending) : array.new<int>()
 
     table.delete(rep)
-    rep := table.new(tps, 7, ng + 10, bgcolor=BG, border_width=1, border_color=GOLD_M, frame_width=2, frame_color=GOLD_M)
+    rep := table.new(tps, 7, ng + 9, bgcolor=BG, border_width=1, border_color=GOLD_M, frame_width=2, frame_color=GOLD_M)
 
     table.cell(rep, 0, 0, group_by, text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
     table.cell(rep, 1, 0, "Tr",   text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
@@ -806,8 +657,7 @@ if barstate.islast
     table.cell(rep, 2, drow, "→", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
     table.cell(rep, 3, drow, na(last_t) ? "-" : str.format("{0,date,dd/MM/yy}", last_t), text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
     table.cell(rep, 4, drow, "from", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
-    bool end_on = not na(last_t) and end_date <= last_t
-    table.cell(rep, 5, drow, str.format("{0,date,dd/MM/yy}", start_date) + (end_on ? " → " + str.format("{0,date,dd/MM/yy}", end_date) : ""), text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
+    table.cell(rep, 5, drow, str.format("{0,date,dd/MM/yy}", start_date), text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
     table.cell(rep, 6, drow, sig_tf + "→" + timeframe.period, text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP)
 
     string zone_s = eff_entry_mode == "Swap Zone (23.6-38.2%)" ? "Swap" : eff_entry_mode == "Best Entry (50-61.8%)" ? "Best" : "Deep"
@@ -834,17 +684,10 @@ if barstate.islast
     int hrow = ng + 7
     table.cell(rep, 0, hrow, "Hours", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
     table.cell(rep, 1, hrow, hb_on ? "🚫 " + array.join(bh_list, ",") : enable_hour_block ? "🚫 ?" : "🚫 off", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="ساعة الإعداد (كسر IB) بتوقيت البورصة")
-    table.cell(rep, 2, hrow, hb_on ? (flt_hard ? "⛔" : "✂ " + str.tostring(c_hb)) : "-", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="كم صفقة (مسكّرة) شالها الفلتر · ⛔ = بوضع الرفض، شوف سطر Flt+")
-
-    // [v1.2] سطر Flt+: فلاتر التحسين المفعّلة، وكم شالت
-    string fl_ic = (fd_ok ? "📅" : "") + (flt_ema_on ? "📈" : "") + (flt_adx_on ? "💪" : "") + (flt_ratr_on ? "📏" : "") + (flt_rr_on ? "⚖️" : "") + (flt_cpos_on ? "🕯" : "") + (flt_rsi_on ? "🌡" : "") + (flt_mkt_on ? "🛒" : "")
-    int lrow = ng + 8
-    table.cell(rep, 0, lrow, "Flt+", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
-    table.cell(rep, 1, lrow, fl_ic == "" ? "off" : fl_ic, text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="فلاتر التحسين المفعّلة (v1.2)")
-    table.cell(rep, 2, lrow, flt_hard ? "⛔ " + str.tostring(c_rej) : "👻 " + str.tostring(c_virt), text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip=flt_hard ? "⛔ رفض: كم إعداد انلغى (مع 🚫)" : "👻 قياس: كم صفقة (مسكّرة) شالتها الفلاتر كلها (مع 🚫)")
+    table.cell(rep, 2, hrow, hb_on ? "✂ " + str.tostring(c_hb) : "-", text_color=INFO, text_size=tsz, bgcolor=TRANSP, tooltip="كم صفقة (مسكّرة) شالها الفلتر")
 
     // سطر Streak: أطول سلسلة ربح وخسارة، السلسلة الحالية، أقصى تراجع، والربح ÷ التراجع
-    int krow = ng + 9
+    int krow = ng + 8
     table.cell(rep, 0, krow, "Streak", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
     table.cell(rep, 1, krow, "🟢 max " + str.tostring(s_mw), text_color=color.lime, text_size=tsz, bgcolor=TRANSP)
     table.cell(rep, 2, krow, "🔴 max " + str.tostring(s_ml), text_color=color.red, text_size=tsz, bgcolor=TRANSP)
@@ -852,69 +695,3 @@ if barstate.islast
     table.cell(rep, 4, krow, "Max DD", text_color=GOLD_M, text_size=tsz, bgcolor=TRANSP)
     table.cell(rep, 5, krow, "-" + str.tostring(s_dd, "#.##"), text_color=color.red, text_size=tsz, bgcolor=TRANSP)
     table.cell(rep, 6, krow, s_dd > 0 ? "Net/DD " + str.tostring(T_net / s_dd, "#.#") : "Net/DD -", text_color=GRAY, text_size=tsz, bgcolor=TRANSP)
-
-    // ═══════════════════════════════════════════════
-    // [v1.2] 🧪 المختبر: كل فلتر لحالو على كل الصفقات المسكّرة (محسوبة + 👻)، مفعّل أو لأ
-    //   ✂ = الصفقات اللي بيشيلها · ΔNet = شو بيتغيّر المجموع لو شغّلتو لحالو · Win% / PF / DD = للباقي
-    //   لون الاسم = z: أخضر = اللي بيشيلو أسوأ من الباقي (الفلتر مفيد)، أحمر = بيشيل صفقات منيحة
-    // ═══════════════════════════════════════════════
-    table.delete(lab)
-    if show_lab
-        int   L_n  = array.size(al_net)
-        float L_s  = 0.0
-        float L_ss = 0.0
-        if L_n > 0
-            for q_i = 0 to L_n - 1
-                float q_x = array.get(al_net, q_i)
-                L_s  += q_x
-                L_ss += q_x * q_x
-        float L_mean = L_n > 0 ? L_s / L_n : 0.0
-        float L_sd   = L_n > 1 ? math.sqrt(math.max((L_ss - L_n * L_mean * L_mean) / (L_n - 1), 0.0)) : 0.0
-        [b_nr, b_wr, b_sr, b_nk, b_wk, b_sk, b_gw, b_gl, b_dd] = f_lab(-1)
-        float b_win = b_nk > 0 ? (b_wk / b_nk) * 100 : 0.0
-        float b_pf  = b_gl > 0 ? b_gw / b_gl : na
-
-        lps = lab_pos_in == "أعلى يمين" ? position.top_right : lab_pos_in == "أعلى يسار" ? position.top_left : lab_pos_in == "أسفل يمين" ? position.bottom_right : position.bottom_left
-        lab := table.new(lps, 7, 12, bgcolor=BG, border_width=1, border_color=GOLD_M, frame_width=2, frame_color=GOLD_M)
-
-        table.cell(lab, 0, 0, "🧪 Lab", text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP, tooltip=flt_hard ? "⛔ رفض: الإعدادات المرفوضة ما صارت صفقات أصلاً، فالمختبر بيقيس بس الفلاتر المطفية على الصفقات اللي صارت. للقياس رجّع 👻." : "كل فلتر لحالو على كل الصفقات المسكّرة (محسوبة + 👻)، مفعّل أو لأ. شغّل الفلتر بس إذا ΔNet موجب والاسم أخضر.")
-        table.cell(lab, 1, 0, "✂Tr",   text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP, tooltip="كم صفقة بيشيل")
-        table.cell(lab, 2, 0, "✂Win%", text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP, tooltip="نسبة ربح الصفقات اللي بيشيلها")
-        table.cell(lab, 3, 0, "ΔNet$", text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP, tooltip="شو بيتغيّر الـ Net لو شغّلتو لحالو: + = بيزيد")
-        table.cell(lab, 4, 0, "Win%",  text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP, tooltip="نسبة الربح للباقي (أخضر = أحسن من Base)")
-        table.cell(lab, 5, 0, "PF",    text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP, tooltip="PF للباقي (أخضر = أحسن من Base)")
-        table.cell(lab, 6, 0, "DD",    text_color=GOLD_B, text_size=tsz, bgcolor=TRANSP, tooltip="أقصى تراجع للباقي (أخضر = أصغر من Base)")
-
-        table.cell(lab, 0, 1, "Base", text_color=GOLD_B, text_size=tsz, bgcolor=TBG, tooltip="كل الصفقات المسكّرة بلا 🚫 ولا فلاتر v1.2 (الفلاتر القديمة متل min/max و Pre-Trend بتضل)")
-        table.cell(lab, 1, 1, str.tostring(b_nk), text_color=GOLD_B, text_size=tsz, bgcolor=TBG)
-        table.cell(lab, 2, 1, "-", text_color=GRAY, text_size=tsz, bgcolor=TBG)
-        table.cell(lab, 3, 1, (b_sk >= 0 ? "+" : "") + str.tostring(b_sk, "#.##"), text_color=b_sk >= 0 ? color.lime : color.red, text_size=tsz, bgcolor=TBG, tooltip="Net الـ Base")
-        table.cell(lab, 4, 1, str.tostring(b_win, "#.#") + "%", text_color=color.rgb(59,209,255), text_size=tsz, bgcolor=TBG)
-        table.cell(lab, 5, 1, na(b_pf) ? "-" : str.tostring(b_pf, "#.##"), text_color=GOLD_B, text_size=tsz, bgcolor=TBG)
-        table.cell(lab, 6, 1, "-" + str.tostring(b_dd, "#.##"), text_color=color.red, text_size=tsz, bgcolor=TBG)
-
-        array<string> fl_nm = array.from("🚫 ساعات", "📅 أيام", "📈 EMA", "💪 ADX", "📏 R/ATR", "⚖️ R:R", "🕯 إغلاق", "🌡 RSI", "🛒 ماركت", "✅ المفعّل سوا")
-        array<bool>   fl_on = array.from(hb_on, fd_ok, flt_ema_on, flt_adx_on, flt_ratr_on, flt_rr_on, flt_cpos_on, flt_rsi_on, flt_mkt_on, false)
-        for q_k = 0 to 9
-            int q_b = q_k < 9 ? int(math.pow(2, q_k)) : 0
-            [q_nr, q_wr, q_sr, q_nk, q_wk, q_sk, q_gw, q_gl, q_dd] = f_lab(q_b)
-            int    q_row = q_k + 2
-            // z = (متوسط الباقي − متوسط المشال) ÷ الخطأ المعياري: موجب = المشال أسوأ
-            float  q_z   = q_nr >= 20 and q_nk >= 20 and L_sd > 0 ? (q_sk / q_nk - q_sr / q_nr) / (L_sd * math.sqrt(1.0 / q_nr + 1.0 / q_nk)) : na
-            float  q_win = q_nk > 0 ? (q_wk / q_nk) * 100 : na
-            float  q_pf  = q_gl > 0 ? q_gw / q_gl : na
-            float  q_dn  = -q_sr
-            color  q_zbg = na(q_z) ? TRANSP : q_z >= 3 ? color.new(color.green, 25) : q_z >= 2 ? color.new(color.green, 65) : q_z <= -3 ? color.new(color.red, 25) : q_z <= -2 ? color.new(color.red, 65) : TRANSP
-            string q_ztp = (na(q_z) ? "صفقات قليلة للحكم" : "z " + str.tostring(q_z, "#.#") + (q_z >= 3 ? " · مفيد حقيقي" : q_z >= 2 ? " · مفيد، ممكن صدفة" : q_z <= -3 ? " · مضرّ حقيقي" : q_z <= -2 ? " · مضرّ، ممكن صدفة" : " · ما بيفرق")) + " · Net بعدو " + str.tostring(q_sk, "#.##") + (q_k == 9 ? " · لازم يطابق TOTAL (إذا Daily Stop Limit مطفي)" : "")
-            string q_nm  = (array.get(fl_on, q_k) ? "✅ " : "") + array.get(fl_nm, q_k)
-            color  q_wc  = na(q_win) ? GRAY : q_win > b_win ? color.lime : q_win < b_win ? color.red : GRAY
-            color  q_pc  = na(q_pf) or na(b_pf) ? GRAY : q_pf > b_pf ? color.lime : q_pf < b_pf ? color.red : GRAY
-            color  q_dc  = q_dd < b_dd ? color.lime : q_dd > b_dd ? color.red : GRAY
-            color  q_rbg = q_k == 9 ? TBG : TRANSP
-            table.cell(lab, 0, q_row, q_nm, text_color=q_k == 9 ? GOLD_B : color.rgb(220,220,220), text_size=tsz, bgcolor=q_k == 9 and na(q_z) ? TBG : q_zbg, tooltip=q_ztp)
-            table.cell(lab, 1, q_row, str.tostring(q_nr), text_color=GRAY, text_size=tsz, bgcolor=q_rbg)
-            table.cell(lab, 2, q_row, q_nr > 0 ? str.tostring((q_wr / q_nr) * 100, "#.#") + "%" : "-", text_color=GRAY, text_size=tsz, bgcolor=q_rbg)
-            table.cell(lab, 3, q_row, (q_dn > 0 ? "+" : "") + str.tostring(q_dn, "#.##"), text_color=q_dn > 0 ? color.lime : q_dn < 0 ? color.red : GRAY, text_size=tsz, bgcolor=q_rbg)
-            table.cell(lab, 4, q_row, na(q_win) ? "-" : str.tostring(q_win, "#.#") + "%", text_color=q_wc, text_size=tsz, bgcolor=q_rbg)
-            table.cell(lab, 5, q_row, na(q_pf) ? "-" : str.tostring(q_pf, "#.##"), text_color=q_pc, text_size=tsz, bgcolor=q_rbg)
-            table.cell(lab, 6, q_row, "-" + str.tostring(q_dd, "#.##"), text_color=q_dc, text_size=tsz, bgcolor=q_rbg)
