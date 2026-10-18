@@ -394,7 +394,7 @@ const COINS=[
  {s:'ADA',n:'كاردانو',sup:36.6e9,demo:.7,tx:'storm',pal:['#0b1a5c','#2346c8','#8fb0ff'],tilt:.4,sp:.6},
  {s:'LINK',n:'تشين لينك',sup:700e6,demo:18,tx:'ice',pal:['#1b3a8a','#86a8ff'],ring:2,tilt:1.25,sp:-.5},
  {s:'AVAX',n:'أفالانش',sup:425e6,demo:25,tx:'rock',pal:['#2a0a0c','#7a1c20','#e84142','#f4a19a','#fff1ee'],tilt:.2,sp:.55},
- {s:'TON',n:'تون',sup:2.55e9,demo:3.2,tx:'ice',pal:['#05506e','#86e0ff'],tilt:.3,sp:.6}
+ {s:'ZEC',n:'زيكاش',sup:16.3e6,demo:60,tx:'ice',pal:['#5a3d06','#f4c25a'],tilt:.3,sp:.6}
 ];
 const IDX={};
 COINS.forEach((c,i)=>{c.i=i;IDX[c.s+'USDT']=i;c.d=i?18+(i-1)*8.6:0;c.r=i?2:SUN_R;c.rT=c.r;c.w=i?.3*Math.pow(18/c.d,1.5):0;
@@ -500,7 +500,9 @@ const inClaude=()=>!!(window.claude&&typeof window.claude.use==='function');
 const BN_REST=['https://data-api.binance.vision','https://api.binance.com'],BN_WS=['wss://data-stream.binance.vision','wss://stream.binance.com:9443'];
 let bnBase=null,bnWs=null,bnFails=0,bnPoll=0,bnRetry=0;
 function tfetch(u,ms){const ac=new AbortController(),t=setTimeout(()=>ac.abort(),ms||7000);return fetch(u,{signal:ac.signal,cache:'no-store'}).finally(()=>clearTimeout(t))}
-async function bnGet(path){let err;for(const b of bnBase?[bnBase]:BN_REST){try{const r=await tfetch(b+path);if(!r.ok)throw new Error('HTTP '+r.status);const j=await r.json();bnBase=b;return j}catch(e){err=e}}throw err}
+/* a 4xx is Binance's real answer, so only network failures and 5xx move on to the other host */
+async function bnGet(path){let err;for(const b of bnBase?[bnBase]:BN_REST){let r;try{r=await tfetch(b+path)}catch(e){err=e;continue}
+ if(r.status>=400&&r.status<500){bnBase=b;throw new Error('HTTP '+r.status)}if(!r.ok){err=new Error('HTTP '+r.status);continue}bnBase=b;return r.json()}throw err}
 async function bnTicker(){const syms=COINS.map(c=>c.s+'USDT');let arr;
  try{arr=await bnGet('/api/v3/ticker/24hr?symbols='+encodeURIComponent(JSON.stringify(syms)))}
  catch(e){if(!/HTTP 400/.test(e&&e.message))throw e;/* one delisted pair fails the whole batch, so ask one by one */
