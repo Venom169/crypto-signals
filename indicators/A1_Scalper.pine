@@ -180,6 +180,9 @@ cSimple = mDir == 1 and close > emaStr ? cCBull : mDir == -1 and close < emaStr 
 // المؤشر بيرسم شموعه فوق شموع الشارت، فبيشتغل التلوين حتى لو في شي تاني عم يلوّن الشموع
 cCandle = candleMd == "Confirmation Gradient" ? cGrad : candleMd == "Confirmation Simple" ? cSimple : na
 plotcandle(open, high, low, close, "Candles", color = cCandle, wickcolor = cCandle, bordercolor = cCandle, display = display.pane)
+// وبيلوّن شموع الشارت نفسها بنفس اللون: لما تمرّق الماوس، الشارت بيطلع شموعه فوق شموع المؤشر،
+// فبتطلع بنفس الألوان وما بيرجع اللون الأصلي
+barcolor(cCandle, title = "Bar Color")
 
 // ════════════════ مناطق الانعكاس ════════════════
 rbBas = ta.alma(hlc3, rbLen, 0.85, 6)
