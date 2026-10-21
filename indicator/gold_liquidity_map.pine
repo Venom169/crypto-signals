@@ -1,0 +1,338 @@
+//@version=6
+indicator("Gold Liquidity Map", shorttitle = "GLM", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// ═════════════════════════════════════════════════════════════════════════════════════════
+// Gold Liquidity Map (GLM) - XAUUSD 15m.  Stage 1 of 6: liquidity levels only.
+// Spec:  GOLD_LIQUIDITY_INDICATOR_SPEC.md  (2.1, 2.2, 4.3, 4.4, 4.11)
+// Logic: research/sweep_engine.py is the reference; when in doubt, the code there decides.
+// No repaint: the engine runs on confirmed bars only, and every higher-timeframe value
+// comes from an HTF bar that has already closed.
+// A chart-reading tool. It promises no profit; the live statistics table (stage 4) is the judge.
+// ═════════════════════════════════════════════════════════════════════════════════════════
+
+// ───── Inputs (spec 4.2) ─────────────────────────────────────────────────────────────────
+string GL = "Levels"
+string GS = "Sweep"
+string GD = "Display"
+
+int    swingLen         = input.int(5, "Swing length, chart TF", minval = 1, group = GL)
+int    htfLen           = input.int(3, "Swing length, 1H and 4H", minval = 1, group = GL)
+bool   useP             = input.bool(true, "Chart-TF swings", group = GL)
+bool   useP1H           = input.bool(true, "1H swings", group = GL)
+bool   useP4H           = input.bool(true, "4H swings", group = GL)
+bool   usePD            = input.bool(true, "Previous day high / low", group = GL)
+bool   usePW            = input.bool(true, "Previous week high / low", group = GL)
+bool   useAsia          = input.bool(true, "Asia range", group = GL)
+string asiaSess         = input.session("0000-0600", "Asia session (UTC)", group = GL)
+int    maxLevelsPerSide = input.int(200, "Max stored levels per side", minval = 1, group = GL)
+int    drawNearest      = input.int(12, "Levels drawn per side (nearest)", minval = 0, maxval = 100, group = GL)
+float  minPen           = input.float(0.0, "Min penetration to take a level ($)", minval = 0.0, step = 0.1, group = GS)
+bool   showLevels       = input.bool(true, "Show levels", group = GD)
+
+// ───── Constants ─────────────────────────────────────────────────────────────────────────
+color  C_CHART   = #2a78d6   // chart-TF swings
+color  C_HTF     = #eb6834   // 1H / 4H swings
+color  C_CAL     = #1baf7a   // previous day / week, Asia range
+int    TR_TAKEN  = 70        // transparency of a line whose level was taken
+int    TR_ENDED  = 40        // transparency of a day / week / Asia line that expired untouched
+int    MAX_LINES = 500       // = max_lines_count. History lines are trimmed below it, so TradingView
+                             //   never auto-deletes the reused pool lines
+string TF_TXT    = timeframe.isseconds ? str.tostring(timeframe.multiplier) + "s" : timeframe.isminutes ? str.tostring(timeframe.multiplier) + "m" : timeframe.period
+
+// ───── Levels (spec 4.4) ─────────────────────────────────────────────────────────────────
+type Liq
+    float  price
+    int    side      // 1 = above price (tops), -1 = below price (bottoms)
+    string kind      // "P", "P1H", "P4H", "PD", "PW", "ASIA"
+    int    born      // time of the bar that made the level, for drawing
+    int    expiry    // na = never expires
+    line   ln        // the level's own line once it has ended (taken or expired)
+
+var array<Liq>   above    = array.new<Liq>()     // nearest first: ascending price
+var array<Liq>   below    = array.new<Liq>()     // nearest first: descending price
+var array<line>  histLn   = array.new<line>()    // lines of ended levels, oldest first
+var array<line>  poolLnUp = array.new<line>()    // reused lines for the nearest active levels
+var array<line>  poolLnDn = array.new<line>()
+var array<label> poolLbUp = array.new<label>()
+var array<label> poolLbDn = array.new<label>()
+var int          nextExp  = na                   // earliest expiry among stored levels
+var float        asiaHi   = na                   // Asia range, tracked on chart bars
+var float        asiaLo   = na
+var int          asiaT    = na
+
+// ───── Helpers ───────────────────────────────────────────────────────────────────────────
+// How "big" a kind is: picks the colour of a shared line and the order of names in its label.
+f_rank(string k) =>
+    switch k
+        "P"    => 1
+        "ASIA" => 2
+        "P1H"  => 3
+        "PD"   => 4
+        "P4H"  => 5
+        "PW"   => 6
+        => 0
+
+f_kindColor(string k) =>
+    k == "P" ? C_CHART : k == "P1H" or k == "P4H" ? C_HTF : C_CAL
+
+f_kindText(string k, int side) =>
+    switch k
+        "P"   => TF_TXT
+        "P1H" => "1H"
+        "P4H" => "4H"
+        "PD"  => side == 1 ? "PDH" : "PDL"
+        "PW"  => side == 1 ? "PWH" : "PWL"
+        => side == 1 ? "ASIA H" : "ASIA L"
+
+f_samePx(float a, float b) =>
+    math.round_to_mintick(a) == math.round_to_mintick(b)
+
+// A group = levels on one side at one price. It is drawn as one line in the colour of its biggest kind.
+f_groupColor(array<Liq> grp) =>
+    string top = grp.first().kind
+    for x in grp
+        if f_rank(x.kind) > f_rank(top)
+            top := x.kind
+    f_kindColor(top)
+
+f_groupBorn(array<Liq> grp) =>
+    int b = grp.first().born
+    for x in grp
+        b := math.min(b, x.born)
+    b
+
+// Label text, e.g. "15m + 1H + PDH  4193.1"
+f_groupText(array<Liq> grp) =>
+    string txt = ""
+    for r = 1 to 6
+        for x in grp
+            if f_rank(x.kind) == r
+                txt += (txt == "" ? "" : " + ") + f_kindText(x.kind, x.side)
+                break
+    txt + "  " + str.tostring(grp.first().price, "#.0")
+
+// ───── Level engine ──────────────────────────────────────────────────────────────────────
+// Insert keeping the side sorted nearest-first. Beyond maxLevelsPerSide the oldest level is dropped.
+f_addLevel(Liq lv) =>
+    array<Liq> arr = lv.side == 1 ? above : below
+    int pos = arr.size()
+    for [i, x] in arr
+        if (lv.side == 1 ? x.price > lv.price : x.price < lv.price)
+            pos := i
+            break
+    arr.insert(pos, lv)
+    if arr.size() > maxLevelsPerSide
+        int old = 0
+        for [i, x] in arr
+            if x.born < arr.get(old).born
+                old := i
+        arr.remove(old)
+
+// Step 2: levels whose life ended before this bar opened (expiry <= time).
+f_expire(array<Liq> arr, array<Liq> out) =>
+    int n = arr.size()
+    if n > 0
+        for i = n - 1 to 0
+            Liq x = arr.get(i)
+            if not na(x.expiry) and x.expiry <= time
+                out.push(arr.remove(i))
+
+f_minExpiry() =>
+    int m = na
+    for x in above
+        if not na(x.expiry)
+            m := na(m) ? x.expiry : math.min(m, x.expiry)
+    for x in below
+        if not na(x.expiry)
+            m := na(m) ? x.expiry : math.min(m, x.expiry)
+    m
+
+// Step 4 (spec 2.2): levels this bar trades beyond. Always a prefix of the nearest-first array.
+// A level is used up the first time price trades beyond it: sweep or break, gap or not.
+f_take(array<Liq> arr, array<Liq> out) =>
+    while arr.size() > 0
+        Liq x = arr.first()
+        if (x.side == 1 ? high <= x.price + minPen : low >= x.price - minPen)
+            break
+        out.push(arr.shift())
+
+// ───── Drawing ───────────────────────────────────────────────────────────────────────────
+f_keepHist(line ln) =>
+    histLn.push(ln)
+    while histLn.size() > math.max(MAX_LINES - 2 * drawNearest, 0)
+        line.delete(histLn.shift())
+
+// Levels that just ended: one line per price, from the level's bar to x2.
+// Stage 1 draws every taken level solid and faded; stage 2 makes the swept ones dotted (spec 4.4).
+f_drawEnded(array<Liq> ended, int x2, bool taken) =>
+    int n = ended.size()
+    if showLevels and n > 0
+        array<float> px = array.new<float>()
+        for x in ended
+            px.push(x.price)
+        array<int> ord = px.sort_indices(order.ascending)
+        int i = 0
+        while i < n
+            Liq first = ended.get(ord.get(i))
+            array<Liq> grp = array.new<Liq>()
+            grp.push(first)
+            int j = i + 1
+            while j < n
+                Liq nx = ended.get(ord.get(j))
+                if nx.side != first.side or not f_samePx(nx.price, first.price)
+                    break
+                grp.push(nx)
+                j += 1
+            line ln = line.new(f_groupBorn(grp), first.price, x2, first.price, xloc = xloc.bar_time, color = color.new(f_groupColor(grp), taken ? TR_TAKEN : TR_ENDED), style = line.style_solid, width = 1)
+            f_keepHist(ln)
+            for k = 0 to grp.size() - 1
+                Liq y = grp.get(k)
+                y.ln := ln
+            i := j
+
+// Nearest active levels on one side: one reused line per price, from the level's bar to the
+// current bar, with its label. Unused pool lines and labels are hidden.
+f_drawPool(array<Liq> arr, array<line> lns, array<label> lbs) =>
+    int n = arr.size()
+    int g = 0
+    int i = 0
+    while i < n and g < lns.size()
+        Liq first = arr.get(i)
+        array<Liq> grp = array.new<Liq>()
+        grp.push(first)
+        int j = i + 1
+        while j < n
+            if not f_samePx(arr.get(j).price, first.price)
+                break
+            grp.push(arr.get(j))
+            j += 1
+        color c = f_groupColor(grp)
+        line ln = lns.get(g)
+        ln.set_xy1(f_groupBorn(grp), first.price)
+        ln.set_xy2(time, first.price)
+        ln.set_color(c)
+        label lb = lbs.get(g)
+        lb.set_xy(bar_index, first.price)
+        lb.set_text(f_groupText(grp))
+        lb.set_textcolor(c)
+        g += 1
+        i := j
+    while g < lns.size()
+        lns.get(g).set_color(na)
+        lbs.get(g).set_text("")
+        g += 1
+
+// ───── Data, read on every bar (spec 4.11 rule 2) ────────────────────────────────────────
+// Chart-TF swing confirmed at this bar's close (spec 2.1): the bar swingLen back is strictly
+// above the swingLen bars before it and >= the swingLen bars after it (mirror for lows).
+float hhC   = ta.highest(high, swingLen)
+float llC   = ta.lowest(low, swingLen)
+float pivHi = high[swingLen] > hhC[swingLen + 1] and high[swingLen] >= hhC ? high[swingLen] : na
+float pivLo = low[swingLen] < llC[swingLen + 1] and low[swingLen] <= llC ? low[swingLen] : na
+
+// The same swing rule on the higher timeframe, for the last CLOSED HTF bar. Every value here is
+// [1] or older, so lookahead_on only places it on the first chart bar after that HTF bar closed (spec 4.3).
+f_htfSwing(int k) =>
+    float hh = ta.highest(high, k)
+    float ll = ta.lowest(low, k)
+    float ph = high[k + 1] > hh[k + 2] and high[k + 1] >= hh[1] ? high[k + 1] : na
+    float pl = low[k + 1] < ll[k + 2] and low[k + 1] <= ll[1] ? low[k + 1] : na
+    [ph, pl, time[k + 1]]
+
+[h1Hi, h1Lo, h1T] = request.security(syminfo.tickerid, "60", f_htfSwing(htfLen), lookahead = barmerge.lookahead_on)
+[h4Hi, h4Lo, h4T] = request.security(syminfo.tickerid, "240", f_htfSwing(htfLen), lookahead = barmerge.lookahead_on)
+[pdHi, pdLo, pdT] = request.security(syminfo.tickerid, "D", [high[1], low[1], time[1]], lookahead = barmerge.lookahead_on)
+[pwHi, pwLo, pwT] = request.security(syminfo.tickerid, "W", [high[1], low[1], time[1]], lookahead = barmerge.lookahead_on)
+
+bool newH1     = nz(ta.change(time("60"))) != 0
+bool newH4     = nz(ta.change(time("240"))) != 0
+bool newDay    = nz(ta.change(time("D"))) != 0      // the trading day rolls at 17:00 New York
+bool newWeek   = nz(ta.change(time("W"))) != 0
+int  dayEnd    = time_close("D")
+int  weekEnd   = time_close("W")
+bool inAsia    = not na(time(timeframe.period, asiaSess, "UTC"))
+bool wasAsia   = inAsia[1]
+bool chartLt1H = timeframe.in_seconds() < 3600     // as in the reference: 1H swings only below 1H
+
+// ───── Engine: one pass per confirmed bar, in the reference's order (spec 4.4) ───────────
+if barstate.isconfirmed
+    // 1. Levels available at this bar's open. Side check against the previous close.
+    bool calAdded = false
+    if useP1H and chartLt1H and newH1
+        if not na(h1Hi) and h1Hi > close[1]
+            f_addLevel(Liq.new(h1Hi, 1, "P1H", h1T, na))
+        if not na(h1Lo) and h1Lo < close[1]
+            f_addLevel(Liq.new(h1Lo, -1, "P1H", h1T, na))
+    if useP4H and newH4
+        if not na(h4Hi) and h4Hi > close[1]
+            f_addLevel(Liq.new(h4Hi, 1, "P4H", h4T, na))
+        if not na(h4Lo) and h4Lo < close[1]
+            f_addLevel(Liq.new(h4Lo, -1, "P4H", h4T, na))
+    if usePD and newDay
+        if not na(pdHi) and pdHi > close[1]
+            f_addLevel(Liq.new(pdHi, 1, "PD", pdT, dayEnd))
+            calAdded := true
+        if not na(pdLo) and pdLo < close[1]
+            f_addLevel(Liq.new(pdLo, -1, "PD", pdT, dayEnd))
+            calAdded := true
+    if usePW and newWeek
+        if not na(pwHi) and pwHi > close[1]
+            f_addLevel(Liq.new(pwHi, 1, "PW", pwT, weekEnd))
+            calAdded := true
+        if not na(pwLo) and pwLo < close[1]
+            f_addLevel(Liq.new(pwLo, -1, "PW", pwT, weekEnd))
+            calAdded := true
+    if useAsia and wasAsia and not inAsia and not na(asiaHi)
+        if asiaHi > close[1]
+            f_addLevel(Liq.new(asiaHi, 1, "ASIA", asiaT, dayEnd))
+            calAdded := true
+        if asiaLo < close[1]
+            f_addLevel(Liq.new(asiaLo, -1, "ASIA", asiaT, dayEnd))
+            calAdded := true
+    if calAdded
+        nextExp := f_minExpiry()
+
+    // 2. Day / week / Asia levels whose life is over. Their line ends on the previous bar.
+    if not na(nextExp) and time >= nextExp
+        array<Liq> gone = array.new<Liq>()
+        f_expire(above, gone)
+        f_expire(below, gone)
+        f_drawEnded(gone, time[1], false)
+        nextExp := f_minExpiry()
+
+    // 3. (stage 2) candle sweeps pending from earlier bars.
+
+    // 4. Levels taken by this bar.
+    array<Liq> takenUp = array.new<Liq>()
+    array<Liq> takenDn = array.new<Liq>()
+    f_take(above, takenUp)
+    f_take(below, takenDn)
+    f_drawEnded(takenUp, time, true)
+    f_drawEnded(takenDn, time, true)
+
+    // 5-6. (stages 2-4) signals, grades, alerts, virtual trades.
+
+    // Asia range on chart bars: restarts on the first bar of the session.
+    if inAsia
+        asiaHi := wasAsia ? math.max(asiaHi, high) : high
+        asiaLo := wasAsia ? math.min(asiaLo, low) : low
+        asiaT  := wasAsia ? asiaT : time
+
+    // 7. Chart-TF swings confirmed at this close. Side check against this close.
+    if useP
+        if not na(pivHi) and pivHi > close
+            f_addLevel(Liq.new(pivHi, 1, "P", time[swingLen], na))
+        if not na(pivLo) and pivLo < close
+            f_addLevel(Liq.new(pivLo, -1, "P", time[swingLen], na))
+
+// ───── Display: reads the engine's state, never changes it ───────────────────────────────
+if barstate.isfirst and drawNearest > 0
+    for k = 1 to drawNearest
+        poolLnUp.push(line.new(time, close, time, close, xloc = xloc.bar_time, color = na, width = 1))
+        poolLnDn.push(line.new(time, close, time, close, xloc = xloc.bar_time, color = na, width = 1))
+        poolLbUp.push(label.new(bar_index, close, "", color = na, style = label.style_label_left, textcolor = na, size = size.small))
+        poolLbDn.push(label.new(bar_index, close, "", color = na, style = label.style_label_left, textcolor = na, size = size.small))
+
+if barstate.islast
+    f_drawPool(showLevels ? above : array.new<Liq>(), poolLnUp, poolLbUp)
+    f_drawPool(showLevels ? below : array.new<Liq>(), poolLnDn, poolLbDn)
