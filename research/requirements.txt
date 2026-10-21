@@ -1,0 +1,4 @@
+pandas>=2.2
+numpy>=1.26
+tabulate>=0.9
+matplotlib>=3.10  # only for plot_examples.py (Arabic text shaping)
