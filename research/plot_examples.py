@@ -64,6 +64,8 @@ def prepare():
         res = simulate(base, sig["i"].to_numpy(), sig["dir"].to_numpy(), S, np.full(len(sig), t), MAX_BARS, COST)
         sig[f"exit{t:g}"] = res["exit"].to_numpy()
         sig[f"bars{t:g}"] = res["bars"].to_numpy()
+        sig[f"pnl{t:g}"] = res["pnl"].to_numpy()
+        sig[f"coin{t:g}"] = S / (S + t)
     sig["stop_px"] = sig["ext"] - sig["dir"] * STOP_BUF
     return base, h1, h4, level_lives(base, levels), sig
 
@@ -95,8 +97,8 @@ def level_lives(base, levels):
 class Labels:
     """Places text in data coordinates and skips anything that would overlap what is already there."""
 
-    def __init__(self, ax):
-        self.ax, self.boxes = ax, []
+    def __init__(self, ax, bg=SURFACE):
+        self.ax, self.boxes, self.bg = ax, [], bg
         fig = ax.figure
         bb = ax.get_position()
         x0, x1 = ax.get_xlim()
@@ -126,7 +128,7 @@ class Labels:
             return False
         self.boxes.append(b)
         self.ax.text(x, y, text, fontsize=size, ha=ha, va=va, color=color, zorder=8,
-                     bbox=dict(boxstyle="square,pad=0.15", facecolor=SURFACE, edgecolor="none", alpha=0.85), **kw)
+                     bbox=dict(boxstyle="square,pad=0.15", facecolor=self.bg, edgecolor="none", alpha=0.85), **kw)
         return True
 
 
@@ -449,6 +451,223 @@ def mockup(base, h1, h4, lives, sig, day_start, day_end, fname):
     plt.close(fig)
 
 
+# TradingView-like dark chart for the "finished indicator" picture.
+TV = dict(bg="#131722", grid="#2a2e39", text="#d1d4dc", muted="#787b86", panel="#1e222d", border="#363a45",
+          up="#26a69a", down="#ef5350")
+DARK_CLASS = {"chart": "#3987e5", "htf": "#d95926", "cal": "#199e70"}  # same hues, dark-mode steps
+
+
+def closed_back(base, side, price, j):
+    """At a level's take bar: did price close back inside within two bars (a sweep) or not (a break)?"""
+    c = base["close"].to_numpy()[j:j + 3]
+    return bool(((c < price) if side == 1 else (c > price)).any())
+
+
+def stats_rows(sig, now):
+    """The live stats table as the indicator would show it at bar `now` (resolved trades only)."""
+    rows = []
+    for name, f in (("الكل", lambda s: s), ("A", lambda s: s[s["grade"] == "A"]),
+                    ("B", lambda s: s[s["grade"] == "B"]), ("AVOID", lambda s: s[s["grade"] == "AVOID"])):
+        cells = [name]
+        for t in (TP1, TP2):
+            done = f(sig[sig["i"] + sig[f"bars{t:g}"] <= now])
+            win = 100 * (done[f"exit{t:g}"] == "tp").mean()
+            coin = 100 * done[f"coin{t:g}"].mean()
+            if t == TP1:
+                cells += [len(done), win, coin, win - coin, done[f"pnl{t:g}"].mean()]
+            else:
+                cells += [win, coin, done[f"pnl{t:g}"].mean()]
+        rows.append(cells)
+    return rows
+
+
+def live_chart(base, h1, h4, lives, sig, when, fname, before=96, after=2, margin=84):
+    """How the finished indicator should look on a dark TradingView chart, `after` bars past a signal."""
+    s = sig[sig["time"] == pd.Timestamp(when, tz="UTC")].iloc[0]
+    i_s = int(s["i"])
+    now, d, e = i_s + after, int(s["dir"]), s["entry"]
+    i0 = now - before
+    o, h, l, c = (base[x].to_numpy() for x in ("open", "high", "low", "close"))
+    sl, tp1, tp2 = s["stop_px"], e + d * TP1, e + d * TP2
+    lo = min(l[i0:now + 1].min(), sl, tp2, tp1)
+    hi = max(h[i0:now + 1].max(), sl, tp2, tp1)
+    ylo, yhi = lo - (hi - lo) * 0.16, hi + (hi - lo) * 0.2
+
+    fig = plt.figure(figsize=(16, 9), dpi=120, facecolor=TV["bg"])
+    ax = fig.add_axes([0.012, 0.14, 0.93, 0.845], facecolor=TV["bg"])
+    ax.set_xlim(i0 - 1, now + margin)
+    ax.set_ylim(ylo, yhi)
+    ax.yaxis.tick_right()
+    ax.grid(True, color=TV["grid"], linewidth=0.7)
+    ax.set_axisbelow(True)
+    for side in ("top", "left", "bottom"):
+        ax.spines[side].set_visible(False)
+    ax.spines["right"].set_color(TV["grid"])
+    ax.tick_params(length=0, labelsize=9.5, colors=TV["muted"])
+    ticks = list(range(i0 + (8 - i0 % 8) % 8, now + 1, 8))
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([base.index[t].strftime("%H:%M") for t in ticks])
+    labels = Labels(ax, bg=TV["bg"])
+
+    # candles
+    for x in range(i0, now + 1):
+        col = TV["up"] if c[x] >= o[x] else TV["down"]
+        ax.plot([x, x], [l[x], h[x]], color=col, linewidth=1, zorder=3)
+        ax.add_patch(Rectangle((x - 0.32, min(o[x], c[x])), 0.64, max(abs(c[x] - o[x]), 0.06),
+                               facecolor=col, edgecolor=col, linewidth=0.6, zorder=4))
+
+    # current price line and tag
+    pc = TV["up"] if c[now] >= o[now] else TV["down"]
+    ax.axhline(c[now], color=pc, linewidth=0.9, linestyle=(0, (1, 2)), zorder=2)
+    ax.text(1.003, c[now], f"{c[now]:.2f}", transform=ax.get_yaxis_transform(), ha="left", va="center",
+            fontsize=9.5, color="white", bbox=dict(boxstyle="square,pad=0.25", facecolor=pc, edgecolor="none"))
+
+    # the open trade plan of the latest signal
+    end = now + 9
+    ax.add_patch(Rectangle((i_s, min(e, sl)), end - i_s, abs(sl - e), facecolor=CRIT, alpha=0.16, zorder=1))
+    ax.add_patch(Rectangle((i_s, min(e, tp2)), end - i_s, abs(tp2 - e), facecolor=GOOD, alpha=0.12, zorder=1))
+    plan = [(e, TV["text"], 1.5, f"Entry {e:.1f}"), (sl, CRIT, 1.8, f"SL {sl:.1f}  (-${abs(sl - e):.1f})"),
+            (tp1, GOOD, 1.5, f"TP1 {tp1:.1f}  (+${TP1:.0f})"), (tp2, GOOD, 1.8, f"TP2 {tp2:.1f}  (+${TP2:.0f})")]
+    for y, col, lw, txt in plan:
+        ax.plot([i_s, end], [y, y], color=col, linewidth=lw, zorder=3, solid_capstyle="round")
+        labels.put(end + 0.6, y, txt, size=9.5, ha="left", va="center", color=TV["text"], force=True)
+
+    # signals with their grade and, once resolved, the outcome of TP1
+    yr = yhi - ylo
+    for _, w in sig[(sig["i"] >= i0) & (sig["i"] <= now)].iterrows():
+        i, wd = int(w["i"]), int(w["dir"])
+        col = TV["muted"] if w["grade"] == "AVOID" else TV["text"]
+        y = h[i] + yr * 0.025 if wd == -1 else l[i] - yr * 0.025
+        ax.plot(i, y, marker="v" if wd == -1 else "^", markersize=11 if i == i_s else 9, color=col,
+                markeredgecolor=TV["bg"], markeredgewidth=1.3, zorder=9)
+        labels.reserve(i - 0.6, i + 0.6, y - yr * 0.015, y + yr * 0.015)
+        ty = y + yr * 0.03 if wd == -1 else y - yr * 0.03
+        labels.put(i, ty, f"{w['type']} · {w['grade']}", size=10 if i == i_s else 9, ha="center",
+                   va="bottom" if wd == -1 else "top", color=col, force=True, weight="bold" if i == i_s else "normal")
+        if i + int(w[f"bars{TP1:g}"]) <= now:
+            mark, mcol = {"tp": ("✓", GOOD), "sl": ("✗", CRIT), "time": ("⌛", TV["muted"])}[w[f"exit{TP1:g}"]]
+            oy = ty + (yr * 0.05 if wd == -1 else -yr * 0.05)
+            ax.text(i, oy, mark, color=mcol, fontsize=13, ha="center", va="center", weight="bold", zorder=9,
+                    path_effects=[pe.withStroke(linewidth=3, foreground=TV["bg"])])
+            labels.reserve(i - 0.8, i + 0.8, oy - yr * 0.022, oy + yr * 0.022)
+
+    # liquidity levels: live ones run to the last bar, taken ones stop where they were taken
+    groups = level_groups(lives, i0, now, ylo, yhi)
+    for g in groups:
+        col = DARK_CLASS[KIND_CLASS[max(g["kinds"], key=KIND_RANK.get)]]
+        hot = any(abs(g["price"] - p) < 1e-6 for p in s["lv_prices"])
+        if g["taken"]:
+            swept = closed_back(base, g["side"], g["price"], g["x1"])
+            ax.plot([g["x0"], g["x1"]], [g["price"]] * 2, color=col, linewidth=2.2 if hot else 1.3, zorder=2,
+                    linestyle=(0, (2, 2)) if swept else "-", alpha=1 if (swept or hot) else 0.45)
+        else:
+            ax.plot([g["x0"], now + 0.6], [g["price"]] * 2, color=col, linewidth=1.6, zorder=2)
+    live = sorted([g for g in groups if not g["taken"]], key=lambda g: abs(g["price"] - c[now]))
+    for g in live[:8]:
+        text = " + ".join(kind_label(k, g["side"]) for k in g["kinds"]) + f"  {g['price']:.1f}"
+        for y, va in ((g["price"], "center"), (g["price"] - labels.dy * 3, "top"), (g["price"] + labels.dy * 3, "bottom")):
+            if labels.put(now + 1.2, y, text, size=9, ha="left", va=va, color=TV["text"]):
+                break
+    for g in groups:
+        if g["taken"] and any(abs(g["price"] - p) < 1e-6 for p in s["lv_prices"]):
+            text = " + ".join(kind_label(k, g["side"]) for k in g["kinds"]) + f"  {g['price']:.1f}"
+            labels.put(g["x0"] + 0.3, g["price"] + (labels.dy * 2 if g["side"] == 1 else -labels.dy * 2), text,
+                       size=9, ha="left", va="bottom" if g["side"] == 1 else "top", color=TV["text"], weight="bold")
+
+    # TradingView-style legend, top left
+    chg = c[now] - c[now - 1]
+    fig.text(0.02, 0.968, "XAUUSD · 15 · OANDA", ha="left", va="top", fontsize=12.5, color=TV["text"], weight="bold")
+    fig.text(0.168, 0.966, f"O {o[now]:.2f}   H {h[now]:.2f}   L {l[now]:.2f}   C {c[now]:.2f}   "
+             f"{chg:+.2f} ({100 * chg / c[now - 1]:+.2f}%)", ha="left", va="top", fontsize=10.5, color=pc)
+    fig.text(0.02, 0.937, "GLM · Gold Liquidity Map   swing 5 · HTF 3 · stop +$1 · TP $15 / $20", ha="left",
+             va="top", fontsize=10, color=TV["muted"])
+
+    def panel(x0, y0, w, hgt):
+        ax.add_patch(FancyBboxPatch((x0, y0), w, hgt, transform=ax.transAxes,
+                                    boxstyle="round,pad=0.004,rounding_size=0.008", facecolor=TV["panel"],
+                                    edgecolor=TV["border"], linewidth=1, zorder=20, alpha=0.97))
+
+    # reading panel, top right
+    t_open = base.index[now]
+    ema1 = htf_value(h1, h1["close"].ewm(span=50, adjust=False).mean(), 3600, t_open)
+    ema4 = htf_value(h4, h4["close"].ewm(span=50, adjust=False).mean(), 14400, t_open)
+    days = daily_table(h1)
+    emad = days["close"].ewm(span=20, adjust=False).mean()
+    emad = emad[pd.to_datetime(days["end"].to_numpy(), unit="s", utc=True) <= t_open].iloc[-1]
+
+    def near(lst):
+        if not lst:
+            return "—"
+        g = min(lst, key=lambda g: abs(g["price"] - c[now]))
+        return (f"{g['price']:.1f} · " + " + ".join(kind_label(k, g["side"]) for k in g["kinds"]) +
+                f" · {abs(g['price'] - c[now]):.1f}$")
+
+    rows = [("ترند الساعة", bool(c[now] > ema1)), ("ترند 4 ساعات", bool(c[now] > ema4)),
+            ("الترند اليومي", bool(c[now] > emad)), ("الجلسة", SESSION_AR[session_of(pd.DatetimeIndex([t_open]))[0]]),
+            ("ATR(14)", f"{s['atr']:.1f}$"), ("أقرب سيولة فوق", near([g for g in live if g["price"] > c[now]])),
+            ("أقرب سيولة تحت", near([g for g in live if g["price"] < c[now]])),
+            ("آخر إشارة", f"{'شراء' if d == 1 else 'بيع'} · {s['type']} · {s['grade']} · مفتوحة")]
+    px0, py1, pw = 0.745, 0.985, 0.25
+    panel(px0, py1 - 0.40, pw, 0.40)
+    ax.text(px0 + pw - 0.012, py1 - 0.02, "لوحة القراءة · GLM", transform=ax.transAxes, ha="right", va="top",
+            fontsize=11.5, color=TV["text"], weight="bold", zorder=21)
+    for k, (name, val) in enumerate(rows):
+        y = py1 - 0.075 - k * 0.04
+        ax.text(px0 + pw - 0.012, y, name, transform=ax.transAxes, ha="right", va="top", fontsize=10,
+                color=TV["muted"], zorder=21)
+        if isinstance(val, bool):
+            ax.text(px0 + 0.012, y, "▲" if val else "▼", transform=ax.transAxes, ha="left", va="top", fontsize=10.5,
+                    color=TV["up"] if val else TV["down"], zorder=21)
+            ax.text(px0 + 0.03, y, "صاعد" if val else "هابط", transform=ax.transAxes, ha="left", va="top",
+                    fontsize=10, color=TV["text"], zorder=21)
+        else:
+            ax.text(px0 + 0.012, y, val, transform=ax.transAxes, ha="left", va="top", fontsize=10,
+                    color=TV["text"], zorder=21)
+
+    # live stats table, bottom right
+    sx0, sy0, sw, sh = 0.665, 0.015, 0.33, 0.265
+    panel(sx0, sy0, sw, sh)
+    ax.text(sx0 + sw - 0.012, sy0 + sh - 0.018, "جدول الإحصاءات الحي", transform=ax.transAxes, ha="right", va="top",
+            fontsize=11.5, color=TV["text"], weight="bold", zorder=21)
+    head = ["التصنيف", "العدد", "ربح 15$", "الصدفة", "الفرق", "$/صفقة", "ربح 20$", "الصدفة", "$/صفقة"]
+    xs = [sw - 0.01, sw - 0.062, sw - 0.095, sw - 0.132, sw - 0.163, sw - 0.196, sw - 0.229, sw - 0.266, sw - 0.297]
+    for cx, txt in zip(xs, head):
+        ax.text(sx0 + cx, sy0 + sh - 0.065, txt, transform=ax.transAxes, ha="right", va="top", fontsize=8.4,
+                color=TV["muted"], zorder=21)
+    for r, (name, n, w1, c1, diff, p1, w2, c2, p2) in enumerate(stats_rows(sig, now)):
+        y = sy0 + sh - 0.1 - r * 0.033
+        cells = [name, f"{n}", f"{w1:.1f}%", f"{c1:.1f}%", f"{diff:+.1f}", f"{p1:+.2f}", f"{w2:.1f}%", f"{c2:.1f}%",
+                 f"{p2:+.2f}"]
+        dcol = GOOD if (diff > 5 and n >= 50) else (CRIT if diff < 0 else TV["muted"])
+        for k, (cx, txt) in enumerate(zip(xs, cells)):
+            ax.text(sx0 + cx, y, txt, transform=ax.transAxes, ha="right", va="top", fontsize=9.2,
+                    color=dcol if k == 4 else TV["text"], zorder=21, weight="bold" if k == 0 else "normal")
+    first = base.index[sig["i"].min()].strftime("%Y-%m-%d")
+    ax.text(sx0 + sw - 0.012, sy0 + 0.012, f"{first} → {t_open:%Y-%m-%d}", transform=ax.transAxes,
+            ha="right", va="bottom", fontsize=8.5, color=TV["muted"], zorder=21)
+    ax.text(sx0 + 0.012, sy0 + 0.012, "الصدفة = نسبة رمي العملة · الفرق ≤ 0 يعني لا ميزة", transform=ax.transAxes,
+            ha="left", va="bottom", fontsize=8.5, color=TV["muted"], zorder=21)
+
+    # the alert this signal fired, and the caption
+    fig.patches.append(FancyBboxPatch((0.012, 0.022), 0.6, 0.06, transform=fig.transFigure,
+                                      boxstyle="round,pad=0.003,rounding_size=0.006", facecolor=TV["panel"],
+                                      edgecolor=TV["border"], linewidth=1))
+    swept_txt = "+".join(kind_label(k, -d) for k in sorted(set(s["kinds"].split("+")), key=KIND_RANK.get))
+    msg = (f"XAUUSD 15m | {'BUY' if d == 1 else 'SELL'} | {s['grade']} | swept {swept_txt} @ {s['ref']:.2f} | "
+           f"entry {e:.2f} | SL {sl:.2f} (${abs(sl - e):.2f}) | TP1 {tp1:.2f} | TP2 {tp2:.2f} | "
+           f"coin-flip {100 * s[f'coin{TP1:g}']:.0f}%/{100 * s[f'coin{TP2:g}']:.0f}%")
+    fig.text(0.605, 0.068, "تنبيه", ha="right", va="center", fontsize=10.5, color=TV["text"], weight="bold")
+    fig.text(0.02, 0.068, f"GLM · {base.index[i_s] + pd.Timedelta(minutes=15):%H:%M} UTC", ha="left", va="center",
+             fontsize=9.5, color=TV["muted"])
+    fig.text(0.02, 0.04, msg, ha="left", va="center", fontsize=9.5, color=TV["text"])
+    fig.text(0.988, 0.068, "نموذج توضيحي لشكل المؤشر بعد اكتماله", ha="right", va="center", fontsize=11,
+             color=TV["text"], weight="bold")
+    fig.text(0.988, 0.04, "الشموع والمستويات والإشارات والأرقام كلها حقيقية من البحث", ha="right", va="center",
+             fontsize=10, color=TV["muted"])
+    fig.savefig(OUT / fname, facecolor=TV["bg"])
+    plt.close(fig)
+
+
 def main():
     OUT.mkdir(exist_ok=True)
     base, h1, h4, lives, sig = prepare()
@@ -474,6 +693,7 @@ def main():
             "تعدد الفريمات لم يعطِ ارتداداً أقوى في البحث. هنا نجح (20$)، لكنه مصنف AVOID لأنه عكس ترند الساعة.",
             "05_multi_timeframe.png", pre=40, post=22)
     mockup(base, h1, h4, lives, sig, "2026-08-23 21:00", "2026-08-24 21:00", "06_indicator_mockup.png")
+    live_chart(base, h1, h4, lives, sig, "2026-10-09 12:45", "07_indicator_live.png")
     print("written:", sorted(p.name for p in OUT.glob("*.png")))
 
 
