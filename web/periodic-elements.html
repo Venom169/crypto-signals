@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>الجدول الدوري للعناصر</title>
+<meta name="theme-color" content="#05070d">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&family=JetBrains+Mono:wght@500;700&family=Reem+Kufi:wght@500;700&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* Layout: a dark chemistry lab wall. The 118 elements live in a CSS 3D world and fly between table, states-of-matter, discovery timeline, sphere and helix. Views, search and quiz at the top; family legend (and the temperature dial in the states view) at the bottom; the element card with its animated atom replaces them when an element is picked. Single dark look; family hues only. */
+:root{
+ --bg:#05070d; --ink:#eef0f7; --muted:#9aa1b8; --line:rgba(150,165,210,.24); --glass:rgba(8,11,22,.8);
+ --amber:#ffb547; --ice:#8fb4ff; --ok:#5ee0a0; --bad:#ff7a8a; --hot:#ff8a3d; --cold:#7cc4ff;
+ --display:"Reem Kufi","Tajawal","Segoe UI",Tahoma,sans-serif;
+ --body:"Tajawal","Segoe UI",Tahoma,sans-serif;
+ --num:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+ --sym:"Chakra Petch","JetBrains Mono",ui-monospace,monospace;
+ color-scheme:dark;
+}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);overflow:hidden;overscroll-behavior:none}
+body{touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;font-family:var(--body);
+ background:radial-gradient(ellipse at 50% 40%,#0d1226 0%,var(--bg) 70%)}
+[hidden]{display:none!important}
+button{font-family:var(--body)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--ice);outline-offset:2px}
+.n{direction:ltr;unicode-bidi:isolate;font-family:var(--num);font-variant-numeric:tabular-nums}
+
+#bg{position:fixed;inset:0;width:100%;height:100%;display:block;
+ background-image:linear-gradient(rgba(120,140,200,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(120,140,200,.05) 1px,transparent 1px);background-size:44px 44px}
+#stage{position:fixed;inset:0;perspective:1200px;overflow:hidden;cursor:grab}
+#stage:active{cursor:grabbing}
+#cam{position:absolute;left:50%;top:50%;width:0;height:0;transform-style:preserve-3d}
+
+/* element tiles */
+.el{position:absolute;left:-60px;top:-75px;width:120px;height:150px;box-sizing:border-box;direction:ltr;color:var(--ink);overflow:hidden;
+ border:1px solid rgba(var(--c),.6);background:rgba(var(--c),.17);border-radius:6px;cursor:pointer;
+ transition:background .6s,border-color .6s,box-shadow .5s,opacity .5s}
+.el .z{position:absolute;top:7px;left:9px;font:500 14px var(--num);color:rgba(238,240,247,.85)}
+.el .st{position:absolute;top:6px;right:8px;font:700 14px var(--body);color:rgb(var(--c));opacity:0;transition:opacity .4s}
+.el .sy{position:absolute;left:0;right:0;top:30px;text-align:center;font:700 54px/1 var(--sym);color:rgb(var(--c));text-shadow:0 0 18px rgba(var(--c),.45)}
+.el .nm{position:absolute;left:4px;right:4px;top:92px;text-align:center;font:500 15px/1.2 var(--body);direction:rtl;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.el .ms{position:absolute;left:0;right:0;bottom:9px;text-align:center;font:500 12px var(--num);color:rgba(238,240,247,.8)}
+.el.dim{opacity:.12}
+.el.sel{border-color:#fff;box-shadow:0 0 40px rgba(255,255,255,.55),inset 0 0 22px rgba(var(--c),.6)}
+#cam .el.sel{background:linear-gradient(rgba(var(--c),.3),rgba(var(--c),.3)),#0b0f1e}
+.el.ok{box-shadow:0 0 40px rgba(94,224,160,.9),inset 0 0 20px rgba(94,224,160,.5);border-color:var(--ok)}
+.el.bad{box-shadow:0 0 40px rgba(255,122,138,.9),inset 0 0 20px rgba(255,122,138,.5);border-color:var(--bad)}
+.quiz .el .nm{visibility:hidden}
+/* states of matter */
+.states .el .st{opacity:1}
+.el::after{content:"";position:absolute;left:0;right:0;bottom:0;height:0;background:linear-gradient(180deg,rgba(var(--c),.18),rgba(var(--c),.5));transition:height .6s ease;pointer-events:none}
+.states .el.sl::after{height:52%;animation:slosh 2.6s ease-in-out infinite}
+@keyframes slosh{0%,100%{transform:skewY(-5deg) translateY(2px)}50%{transform:skewY(5deg) translateY(-2px)}}
+.states .el.sg{background:rgba(var(--c),.05);border-style:dashed;border-color:rgba(var(--c),.55)}
+.states .el.sg .sy{opacity:.8;text-shadow:0 0 24px rgba(var(--c),.9)}
+.states .el.su{background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.06) 0 6px,transparent 6px 12px)}
+.ghost{position:absolute;left:-60px;top:-75px;width:120px;height:150px;box-sizing:border-box;border:1px dashed rgba(150,165,210,.35);border-radius:6px;
+ display:grid;place-items:center;font:500 16px var(--num);color:var(--muted);direction:ltr;transition:opacity .8s;pointer-events:none}
+.tl{position:absolute;left:-150px;top:-30px;width:300px;text-align:center;font:700 24px var(--num);color:var(--muted);direction:ltr;transition:opacity .8s;pointer-events:none;white-space:nowrap}
+.tl.ar{font:700 26px var(--body);direction:rtl}
+#key{position:absolute;left:-650px;top:-230px;width:1300px;height:460px;box-sizing:border-box;padding:26px 40px;direction:rtl;transition:opacity .8s;pointer-events:none;
+ display:grid;grid-template-columns:1fr auto;gap:40px;align-items:center}
+#key .kt{font:700 74px/1.1 var(--display);color:var(--ink);text-shadow:0 0 30px rgba(143,180,255,.35)}
+#key .ks{margin-top:14px;font:400 26px/1.6 var(--body);color:var(--muted);max-width:30ch}
+#key .kb{margin-top:18px;font:700 26px var(--body);color:var(--amber)}
+#key .kx{position:relative;width:330px;height:300px}
+#key .kx .el{position:absolute;left:105px;top:60px;transform:scale(1.25);cursor:default;--c:160,170,210}
+#key .kx span{position:absolute;font:500 18px var(--body);color:var(--muted);white-space:nowrap}
+#key .kx span::before{content:"";position:absolute;top:50%;width:26px;border-top:1px solid var(--line)}
+#key .kx .l1{left:-18px;top:58px} #key .kx .l1::before{left:100%;margin-left:4px}
+#key .kx .l3{left:-6px;top:120px} #key .kx .l3::before{left:100%;margin-left:4px}
+#key .kx .l4{right:-10px;top:178px} #key .kx .l4::before{right:100%;margin-right:4px}
+#key .kx .l5{left:-30px;top:232px} #key .kx .l5::before{left:100%;margin-left:4px}
+
+/* HUD */
+.hud{position:fixed;inset:0;pointer-events:none;direction:rtl;font-family:var(--body)}
+#top{position:absolute;top:0;left:0;right:0;display:grid;justify-items:center;gap:8px;
+ padding:calc(env(safe-area-inset-top,0px) + 10px) max(16px,env(safe-area-inset-right,0px)) 8px max(16px,env(safe-area-inset-left,0px));
+ opacity:0;transition:opacity 1s}
+#top.on{opacity:1}
+.pill{pointer-events:auto;font:500 13px/1 var(--body);color:var(--ink);background:var(--glass);border:1px solid var(--line);border-radius:999px;padding:9px 13px;cursor:pointer;white-space:nowrap}
+.pill[aria-pressed="true"]{border-color:var(--amber);color:#ffe2b0;background:rgba(60,36,10,.62)}
+#views{pointer-events:auto;display:flex;gap:2px;padding:3px;border:1px solid var(--line);border-radius:999px;background:var(--glass);max-width:100%;overflow-x:auto;scrollbar-width:none}
+#views::-webkit-scrollbar{display:none}
+#views button{flex:none;font:500 13px/1 var(--body);color:var(--muted);background:none;border:0;border-radius:999px;padding:8px 12px;cursor:pointer;white-space:nowrap}
+#views button[aria-pressed="true"]{color:#1a1000;background:var(--amber);font-weight:700}
+#findrow{display:flex;gap:8px;width:min(440px,100%)}
+#find{pointer-events:auto;flex:1;min-width:0;box-sizing:border-box;font:500 14px var(--body);color:var(--ink);background:var(--glass);border:1px solid var(--line);border-radius:12px;padding:9px 12px;
+ -webkit-user-select:text;user-select:text;touch-action:auto}
+#find::placeholder{color:var(--muted)}
+@media (max-width:420px){#views button{padding:8px 9px;font-size:12.5px}}
+
+#bottom{position:absolute;left:0;right:0;bottom:0;display:grid;gap:8px;padding-bottom:calc(env(safe-area-inset-bottom,0px) + 12px);opacity:0;transition:opacity 1s}
+#bottom.on{opacity:1}
+#temp{pointer-events:auto;justify-self:center;width:min(560px,calc(100% - 32px));box-sizing:border-box;display:grid;gap:8px;padding:12px 14px;border:1px solid var(--line);border-radius:16px;background:var(--glass);
+ -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);touch-action:auto}
+.trow{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+#tC{font:700 28px/1 var(--num);direction:ltr;unicode-bidi:isolate}
+#tK{font:500 12px var(--num);color:var(--muted);direction:ltr;unicode-bidi:isolate;margin-inline-start:8px}
+#tN{font:500 12.5px var(--body);color:var(--muted)}
+#tN b{color:var(--ink);font-family:var(--num)}
+#tR{width:100%;margin:0;accent-color:var(--hot);height:28px;direction:ltr}
+.tpre{display:flex;gap:6px;flex-wrap:wrap}
+.tpre button{font:500 12px var(--body);color:var(--muted);background:none;border:1px solid var(--line);border-radius:999px;padding:6px 10px;cursor:pointer}
+.tpre button:hover{color:var(--ink)}
+#tNote{font:500 13px/1.5 var(--body);color:#ffe2b0;min-height:0}
+#tNote:empty{display:none}
+#legend{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding:0 max(16px,env(safe-area-inset-right,0px)) 0 max(16px,env(safe-area-inset-left,0px))}
+#legend::-webkit-scrollbar{display:none}
+#legend button{pointer-events:auto;flex:none;display:flex;align-items:center;gap:7px;font:500 12.5px var(--body);color:var(--ink);background:var(--glass);border:1px solid var(--line);border-radius:999px;padding:7px 11px;cursor:pointer;white-space:nowrap}
+#legend button i{width:10px;height:10px;border-radius:3px;background:rgb(var(--c));box-shadow:0 0 8px rgba(var(--c),.7)}
+#legend button em{font:500 11px var(--num);font-style:normal;color:var(--muted)}
+#legend button[aria-pressed="true"]{border-color:rgb(var(--c));background:rgba(var(--c),.2)}
+@media (min-width:1200px){#legend{justify-content:center}}
+
+#card{position:absolute;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 12px);width:min(580px,calc(100% - 32px));box-sizing:border-box;pointer-events:auto;
+ display:grid;gap:10px;padding:14px 16px;border:1px solid var(--line);border-radius:18px;background:var(--glass);max-height:calc(100% - 140px);overflow:auto;
+ -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);opacity:0;transform:translate(-50%,16px);transition:opacity .45s ease,transform .45s ease;touch-action:auto}
+#card.on{opacity:1;transform:translate(-50%,0)}
+#card>*{min-width:0}
+.chead{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:14px;align-items:center}
+.mini{position:relative;width:74px;height:92px;box-sizing:border-box;direction:ltr;border:1px solid rgba(var(--c),.7);background:rgba(var(--c),.2);border-radius:6px}
+.mini .z{position:absolute;top:5px;left:6px;font:500 11px var(--num);color:rgba(238,240,247,.85)}
+.mini .sy{position:absolute;left:0;right:0;top:22px;text-align:center;font:700 34px/1 var(--sym);color:rgb(var(--c))}
+.mini .ms{position:absolute;left:0;right:0;bottom:7px;text-align:center;font:500 10px var(--num);color:rgba(238,240,247,.85)}
+#ck{display:inline-block;font:500 12px/1.4 var(--body);color:rgb(var(--c));letter-spacing:.04em}
+#cn{margin:2px 0 2px;font:700 clamp(24px,5.8vmin,32px)/1.15 var(--display)}
+#cen{font:500 13px var(--num);color:var(--muted);direction:ltr;unicode-bidi:isolate}
+#cx{align-self:start;font:500 16px/1 var(--body);color:var(--muted);background:none;border:1px solid var(--line);border-radius:50%;width:34px;height:34px;cursor:pointer}
+.cbody{display:grid;grid-template-columns:150px minmax(0,1fr);gap:14px;align-items:center}
+#atom{width:150px;height:150px;display:block}
+#cs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px}
+#cs div{display:grid;gap:1px;min-width:0}
+#cs span{font:500 11px var(--body);color:var(--muted)}
+#cs b{font:700 14px var(--num);direction:ltr;unicode-bidi:isolate;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#cs b.ar{font-family:var(--body);direction:rtl}
+#cs .wide{grid-column:1/-1}
+#cs .cfg{white-space:normal;font-size:13px}
+#cf{margin:0;font:400 15px/1.7 var(--body);color:#dcd9f3;text-wrap:pretty}
+@media (max-width:440px){.cbody{grid-template-columns:118px minmax(0,1fr);gap:10px}#atom{width:118px;height:118px}#cs{gap:6px 8px}#cs b{font-size:13px}}
+
+#quiz{position:absolute;left:50%;top:calc(env(safe-area-inset-top,0px) + 136px);transform:translateX(-50%);width:min(440px,calc(100% - 32px));box-sizing:border-box;pointer-events:auto;
+ text-align:center;padding:12px 14px;border:1px solid var(--line);border-radius:18px;background:var(--glass);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+#qq{font:700 clamp(22px,5.6vmin,32px)/1.25 var(--display)}
+#qs{margin-top:4px;font:500 12px var(--body);letter-spacing:.06em;color:var(--muted)}
+#qf{margin-top:6px;font:500 15px/1.5 var(--body);color:#dcd9f3;min-height:1.5em}
+#qf.good{color:var(--ok)} #qf.bad{color:var(--bad)}
+#quiz .row{display:flex;justify-content:center;gap:8px;margin-top:8px}
+
+#toast{position:absolute;left:50%;top:calc(env(safe-area-inset-top,0px) + 30vh);transform:translate(-50%,-10px);max-width:calc(100% - 32px);text-align:center;
+ font:700 clamp(20px,5.2vmin,34px)/1.35 var(--display);text-wrap:balance;opacity:0;transition:opacity .4s,transform .4s;text-shadow:0 0 22px var(--amber),0 0 48px var(--amber)}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+#hint{position:absolute;left:16px;right:16px;top:calc(env(safe-area-inset-top,0px) + 140px);text-align:center;font:400 13px/1.6 var(--body);color:var(--muted);opacity:0;transition:opacity 1.2s;text-wrap:balance}
+#hint.on{opacity:.95}
+
+#veil{position:fixed;inset:0;z-index:5;display:grid;place-items:center;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));direction:rtl;
+ background:radial-gradient(ellipse at 50% 45%,rgba(14,18,40,.55),rgba(5,7,13,.9) 72%);transition:opacity 1s}
+#veil.out{opacity:0;pointer-events:none}
+#veil .in{display:grid;gap:16px;justify-items:center;text-align:center;max-width:34ch}
+#veil .k{font:500 13px var(--body);letter-spacing:.24em;color:var(--muted)}
+#veil h1{margin:0;font:700 clamp(38px,9.5vmin,80px)/1.15 var(--display);text-wrap:balance;text-shadow:0 0 30px rgba(143,180,255,.45)}
+#veil p{margin:0;font:400 clamp(15px,3.6vmin,19px)/1.75 var(--body);color:#cfd3e8;text-wrap:pretty}
+#go{margin-top:6px;font:700 clamp(17px,4vmin,21px) var(--display);color:#1a1000;background:linear-gradient(180deg,#ffe2a8,var(--amber));
+ border:0;border-radius:999px;padding:14px 38px;min-width:190px;box-shadow:0 0 34px rgba(255,181,71,.45);cursor:pointer}
+#go:focus-visible{outline:2px solid var(--ice);outline-offset:3px}
+@media (prefers-reduced-motion:reduce){#card,#toast,#veil,.el{transition:none}.states .el.sl::after{animation:none}}
+</style>
+</head>
+<body>
+
+<canvas id="bg" aria-hidden="true"></canvas>
+<div id="stage" aria-label="الجدول الدوري ثلاثي الأبعاد"><div id="cam"></div></div>
+<div class="hud">
+ <div id="top">
+  <div id="views" role="group" aria-label="شكل العرض">
+   <button type="button" data-v="table" aria-pressed="true">الجدول</button>
+   <button type="button" data-v="states" aria-pressed="false">الحرارة</button>
+   <button type="button" data-v="disc" aria-pressed="false">الاكتشاف</button>
+   <button type="button" data-v="sphere" aria-pressed="false">كرة</button>
+   <button type="button" data-v="helix" aria-pressed="false">لولب</button>
+  </div>
+  <div id="findrow"><input id="find" type="search" placeholder="دوّر: حديد، Au، 79…" autocomplete="off" enterkeyhint="search" aria-label="دوّر على عنصر"><button class="pill" id="qbtn" type="button" aria-pressed="false">◎ تحدّي</button></div>
+ </div>
+ <div id="quiz" hidden><div id="qq"></div><div id="qs"></div><div id="qf"></div><div class="row"><button class="pill" id="qa" type="button" hidden>العب كمان</button><button class="pill" id="qx" type="button">خروج</button></div></div>
+ <div id="toast"></div>
+ <div id="hint"></div>
+ <div id="bottom">
+  <div id="temp" hidden>
+   <div class="trow"><div><b id="tC">25 °C</b><span id="tK">298 K</span></div><div id="tN"></div></div>
+   <input id="tR" type="range" min="0" max="1000" step="1" value="214" aria-label="درجة الحرارة">
+   <div class="tpre"><button type="button" data-k="0">الصفر المطلق</button><button type="button" data-k="298.15">حرارة الغرفة</button><button type="button" data-k="1273.15">فرن 1000°</button><button type="button" data-k="5778">سطح الشمس</button></div>
+   <div id="tNote"></div>
+  </div>
+  <div id="legend" role="group" aria-label="العائلات"></div>
+ </div>
+ <div id="card" aria-live="polite" hidden>
+  <div class="chead">
+   <div class="mini" id="ctile"><span class="z" id="mz"></span><span class="sy" id="msy"></span><span class="ms" id="mms"></span></div>
+   <div><div id="ck"></div><h2 id="cn"></h2><div id="cen"></div></div>
+   <button id="cx" type="button" aria-label="سكّر">✕</button>
+  </div>
+  <div class="cbody"><canvas id="atom" aria-label="نموذج الذرّة"></canvas><div id="cs"></div></div>
+  <p id="cf"></p>
+ </div>
+</div>
+<div id="veil"><div class="in">
+ <div class="k">مختبر الكيمياء</div>
+ <h1>الجدول الدوري للعناصر</h1>
+ <p>كل العناصر الـ 118 اللي بيتركّب منها الكون. المس أي عنصر لتشوف ذرّته عم تدور، وسخّن الجدول من الصفر المطلق لحرارة الشمس لتشوف العناصر بتدوب وبتغلي. وبعدها تحدّى حالك.</p>
+ <button id="go" type="button">ادخل المختبر</button>
+</div></div>
+
+<script>
+(()=>{
+'use strict';
+const $=id=>document.getElementById(id);
+const de=document.documentElement;de.lang='ar';de.dir='rtl';
+const touch=matchMedia('(pointer:coarse)').matches;
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const TAU=Math.PI*2;
+const clamp=(v,a,b)=>v<a?a:v>b?b:v, lerp=(a,b,t)=>a+(b-a)*t;
+const ease=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+const angD=(a,b)=>Math.atan2(Math.sin(a-b),Math.cos(a-b));
+const R=(a,b)=>a+Math.random()*(b-a);
+let sel=-1;
+const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{v==null?localStorage.removeItem(k):localStorage.setItem(k,String(v))}catch(e){}}};
+const rgb=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16)).join(',');
+const iso=s=>'⁦'+s+'⁩';
+
+/* ---------- the 118 elements ----------
+   symbol|Arabic|English|standard atomic weight ([n] = mass number of the longest-lived isotope)|family|melting K|boiling K|year discovered (0 = known since antiquity)
+   Melting and boiling points at normal pressure; "~" marks estimates, empty means unknown; C and As sublime, He never freezes at normal pressure. */
+const FAM={
+ ak:{n:'فلزات قلوية',c:'#ff6b6b'},ae:{n:'فلزات قلوية ترابية',c:'#ff9f43'},tm:{n:'فلزات انتقالية',c:'#f2c94c'},pt:{n:'فلزات ما بعد الانتقالية',c:'#9bd45a'},
+ md:{n:'أشباه فلزات',c:'#34d399'},nm:{n:'لافلزات',c:'#38bdf8'},hg:{n:'هالوجينات',c:'#6b8cff'},ng:{n:'غازات نبيلة',c:'#a78bfa'},
+ ln:{n:'لانثانيدات',c:'#e879f9'},an:{n:'أكتينيدات',c:'#fb7aa9'}};
+Object.values(FAM).forEach(f=>f.rgb=rgb(f.c));
+const DATA=`H|هيدروجين|Hydrogen|1.008|nm|13.99|20.27|1766
+He|هيليوم|Helium|4.0026|ng|0|4.22|1868
+Li|ليثيوم|Lithium|6.94|ak|453.65|1603|1817
+Be|بيريليوم|Beryllium|9.0122|ae|1560|2742|1798
+B|بورون|Boron|10.81|md|2349|4200|1808
+C|كربون|Carbon|12.011|nm|3915|3915|0
+N|نيتروجين|Nitrogen|14.007|nm|63.15|77.36|1772
+O|أكسجين|Oxygen|15.999|nm|54.36|90.19|1771
+F|فلور|Fluorine|18.998|hg|53.48|85.03|1886
+Ne|نيون|Neon|20.180|ng|24.56|27.07|1898
+Na|صوديوم|Sodium|22.990|ak|370.94|1156|1807
+Mg|مغنيسيوم|Magnesium|24.305|ae|923|1363|1755
+Al|ألومنيوم|Aluminium|26.982|pt|933.47|2743|1825
+Si|سيليكون|Silicon|28.085|md|1687|3538|1824
+P|فوسفور|Phosphorus|30.974|nm|317.3|553.7|1669
+S|كبريت|Sulfur|32.06|nm|388.36|717.8|0
+Cl|كلور|Chlorine|35.45|hg|171.6|239.11|1774
+Ar|أرغون|Argon|39.948|ng|83.81|87.3|1894
+K|بوتاسيوم|Potassium|39.098|ak|336.7|1032|1807
+Ca|كالسيوم|Calcium|40.078|ae|1115|1757|1808
+Sc|سكانديوم|Scandium|44.956|tm|1814|3109|1879
+Ti|تيتانيوم|Titanium|47.867|tm|1941|3560|1791
+V|فاناديوم|Vanadium|50.942|tm|2183|3680|1801
+Cr|كروم|Chromium|51.996|tm|2180|2944|1797
+Mn|منغنيز|Manganese|54.938|tm|1519|2334|1774
+Fe|حديد|Iron|55.845|tm|1811|3134|0
+Co|كوبالت|Cobalt|58.933|tm|1768|3200|1735
+Ni|نيكل|Nickel|58.693|tm|1728|3003|1751
+Cu|نحاس|Copper|63.546|tm|1357.77|2835|0
+Zn|زنك|Zinc|65.38|tm|692.68|1180|1746
+Ga|غاليوم|Gallium|69.723|pt|302.91|2673|1875
+Ge|جرمانيوم|Germanium|72.630|md|1211.4|3106|1886
+As|زرنيخ|Arsenic|74.922|md|887|887|1250
+Se|سيلينيوم|Selenium|78.971|nm|494|958|1817
+Br|بروم|Bromine|79.904|hg|265.8|332|1826
+Kr|كريبتون|Krypton|83.798|ng|115.78|119.93|1898
+Rb|روبيديوم|Rubidium|85.468|ak|312.45|961|1861
+Sr|سترونشيوم|Strontium|87.62|ae|1050|1650|1790
+Y|إتريوم|Yttrium|88.906|tm|1799|3203|1794
+Zr|زركونيوم|Zirconium|91.224|tm|2128|4650|1789
+Nb|نيوبيوم|Niobium|92.906|tm|2750|5017|1801
+Mo|موليبدنوم|Molybdenum|95.95|tm|2896|4912|1778
+Tc|تكنيشيوم|Technetium|[98]|tm|2430|4538|1937
+Ru|روثينيوم|Ruthenium|101.07|tm|2607|4423|1844
+Rh|روديوم|Rhodium|102.91|tm|2237|3968|1804
+Pd|بالاديوم|Palladium|106.42|tm|1828.05|3236|1802
+Ag|فضة|Silver|107.87|tm|1234.93|2435|0
+Cd|كادميوم|Cadmium|112.41|tm|594.22|1040|1817
+In|إنديوم|Indium|114.82|pt|429.75|2345|1863
+Sn|قصدير|Tin|118.71|pt|505.08|2875|0
+Sb|أنتيمون|Antimony|121.76|md|903.78|1908|0
+Te|تيلوريوم|Tellurium|127.60|md|722.66|1261|1782
+I|يود|Iodine|126.90|hg|386.85|457.4|1811
+Xe|زينون|Xenon|131.29|ng|161.4|165.05|1898
+Cs|سيزيوم|Caesium|132.91|ak|301.7|944|1860
+Ba|باريوم|Barium|137.33|ae|1000|2118|1772
+La|لانثانوم|Lanthanum|138.91|ln|1193|3737|1839
+Ce|سيريوم|Cerium|140.12|ln|1068|3716|1803
+Pr|براسيوديميوم|Praseodymium|140.91|ln|1208|3403|1885
+Nd|نيوديميوم|Neodymium|144.24|ln|1297|3347|1885
+Pm|بروميثيوم|Promethium|[145]|ln|1315|3273|1945
+Sm|ساماريوم|Samarium|150.36|ln|1345|2173|1879
+Eu|يوروبيوم|Europium|151.96|ln|1099|1802|1901
+Gd|غادولينيوم|Gadolinium|157.25|ln|1585|3546|1880
+Tb|تيربيوم|Terbium|158.93|ln|1629|3396|1843
+Dy|ديسبروسيوم|Dysprosium|162.50|ln|1680|2840|1886
+Ho|هولميوم|Holmium|164.93|ln|1734|2873|1878
+Er|إربيوم|Erbium|167.26|ln|1802|3141|1843
+Tm|ثوليوم|Thulium|168.93|ln|1818|2223|1879
+Yb|إتيربيوم|Ytterbium|173.05|ln|1097|1469|1878
+Lu|لوتيشيوم|Lutetium|174.97|ln|1925|3675|1907
+Hf|هافنيوم|Hafnium|178.49|tm|2506|4876|1923
+Ta|تانتالوم|Tantalum|180.95|tm|3290|5731|1802
+W|تنغستن|Tungsten|183.84|tm|3695|6203|1783
+Re|رينيوم|Rhenium|186.21|tm|3459|5869|1925
+Os|أوزميوم|Osmium|190.23|tm|3306|5285|1803
+Ir|إيريديوم|Iridium|192.22|tm|2719|4403|1803
+Pt|بلاتين|Platinum|195.08|tm|2041.4|4098|1735
+Au|ذهب|Gold|196.97|tm|1337.33|3243|0
+Hg|زئبق|Mercury|200.59|tm|234.32|629.88|0
+Tl|ثاليوم|Thallium|204.38|pt|577|1746|1861
+Pb|رصاص|Lead|207.2|pt|600.61|2022|0
+Bi|بزموت|Bismuth|208.98|pt|544.7|1837|1500
+Po|بولونيوم|Polonium|[209]|pt|527|1235|1898
+At|أستاتين|Astatine|[210]|hg|~575|~610|1940
+Rn|رادون|Radon|[222]|ng|202|211.5|1899
+Fr|فرانسيوم|Francium|[223]|ak|~300|~950|1939
+Ra|راديوم|Radium|[226]|ae|973|2010|1898
+Ac|أكتينيوم|Actinium|[227]|an|1500|~3500|1899
+Th|ثوريوم|Thorium|232.04|an|2023|5061|1829
+Pa|بروتكتينيوم|Protactinium|231.04|an|1841|~4300|1913
+U|يورانيوم|Uranium|238.03|an|1405.3|4404|1789
+Np|نبتونيوم|Neptunium|[237]|an|912|4447|1940
+Pu|بلوتونيوم|Plutonium|[244]|an|912.5|3505|1940
+Am|أمريسيوم|Americium|[243]|an|1449|2880|1944
+Cm|كوريوم|Curium|[247]|an|1613|3383|1944
+Bk|بركيليوم|Berkelium|[247]|an|1259|~2900|1949
+Cf|كاليفورنيوم|Californium|[251]|an|1173|~1743|1950
+Es|أينشتاينيوم|Einsteinium|[252]|an|1133|~1269|1952
+Fm|فيرميوم|Fermium|[257]|an|~1800||1952
+Md|مندليفيوم|Mendelevium|[258]|an|~1100||1955
+No|نوبليوم|Nobelium|[259]|an|~1100||1958
+Lr|لورنسيوم|Lawrencium|[266]|an|~1900||1961
+Rf|رذرفورديوم|Rutherfordium|[267]|tm|||1964
+Db|دوبنيوم|Dubnium|[268]|tm|||1968
+Sg|سيبورغيوم|Seaborgium|[269]|tm|||1974
+Bh|بوريوم|Bohrium|[270]|tm|||1981
+Hs|هاسيوم|Hassium|[269]|tm|||1984
+Mt|مايتنريوم|Meitnerium|[278]|tm|||1982
+Ds|دارمشتاتيوم|Darmstadtium|[281]|tm|||1994
+Rg|رونتجينيوم|Roentgenium|[282]|tm|||1994
+Cn|كوبرنيسيوم|Copernicium|[285]|tm|||1996
+Nh|نيهونيوم|Nihonium|[286]|pt|||2004
+Fl|فليروفيوم|Flerovium|[289]|pt|||1999
+Mc|موسكوفيوم|Moscovium|[290]|pt|||2003
+Lv|ليفرموريوم|Livermorium|[293]|pt|||2000
+Ts|تينيسين|Tennessine|[294]|hg|||2010
+Og|أوغانيسون|Oganesson|[294]|ng|||2002`;
+const FACTS={
+ H:'أخف عنصر وأكتر عنصر بالكون: حوالي ثلاث أرباع المادة العادية هيدروجين، والنجوم بتحرقه لتضوي.',
+ He:'أخف من الهوا، ولهيك البالونات بتطير فيه. وهو العنصر الوحيد اللي ما بيتجمّد تحت الضغط العادي، حتى على الصفر المطلق.',
+ Li:'أخف معدن على الإطلاق، بيطوف على المي، وهو قلب بطارية جوالك.',
+ Be:'شبابيك أجهزة الأشعة السينية بتنعمل منه، لأن الأشعة بتعبر منه بسهولة.',
+ B:'زجاج «البيركس» اللي بيتحمّل الفرن فيه بورون.',
+ C:'أساس كل الكائنات الحية. والألماس ورصاص القلم (الغرافيت) هنن نفس العنصر، بس الذرّات مرتّبة بشكل مختلف.',
+ N:'حوالي 78% من الهوا اللي عم تتنفّسه نيتروجين.',
+ O:'21% من الهوا، وهو أكتر عنصر بقشرة الأرض، وكمان بجسمك.',
+ F:'أنشط عنصر كيميائي على الإطلاق. ومركّباته (الفلوريد) بتحمي سنانك بمعجون الأسنان.',
+ Ne:'هو اللي بيضوي أحمر برتقالي بلافتات «النيون».',
+ Na:'معدن طري بينقطع بالسكين وبيفور إذا لمس المي. ومع الكلور السام بيعمل ملح الطعام!',
+ Mg:'بيحترق بضو أبيض قوي كتير، وكانوا يستعملوه بفلاشات التصوير القديمة وبالألعاب النارية.',
+ Al:'أكتر معدن بقشرة الأرض، وكان بالقرن التاسع عشر أغلى من الذهب لأنه صعب كتير يتطلّع من صخره.',
+ Si:'قلب كل الشرائح الإلكترونية، ومنه أخد «سيليكون فالي» اسمه.',
+ P:'الفوسفور الأبيض بيلمع بالعتمة. واكتشفه خيميائي ألماني سنة 1669 وهو عم يغلي… بول!',
+ S:'ريحة البيض الخربان والبراكين جاية من مركّبات فيها كبريت.',
+ Cl:'غاز أصفر مخضر سام، بس مركّباته بتعقّم مي الشرب والمسابح.',
+ Ar:'تالت أكتر غاز بالهوا (حوالي 1%)، واسمه باليوناني يعني «الكسول» لأنه ما بيتفاعل.',
+ K:'الموز غني فيه، وإذا رميته بالمي بيولّع بلهب بنفسجي.',
+ Ca:'هو اللي بيبني عضامك وسنانك، والرخام والطباشير أغلبهم كالسيوم.',
+ Ti:'قوي متل الفولاذ وأخف منه بكتير، ولهيك بيدخل بالطيارات والمفاصل الصناعية.',
+ Cr:'هو اللي بيعطي الياقوت لونه الأحمر، والزمرد لونه الأخضر، والسيارات لمعتها.',
+ Fe:'قلب الأرض أغلبه حديد، وهو اللي بيحمل الأكسجين بدمك وبيعطيه لونه الأحمر.',
+ Co:'منه اللون الأزرق العميق بالزجاج والخزف القديم.',
+ Ni:'أغلب النيازك الحديدية اللي بتوقع على الأرض فيها نيكل.',
+ Cu:'من أول المعادن اللي استعملها الإنسان. وتمثال الحرية أخضر لأن نحاسه تأكسد.',
+ Zn:'بيحمي الحديد من الصدأ، وهاد اسمه «الجلفنة».',
+ Ga:'بيدوب بإيدك! درجة انصهاره 29.8 °C بس.',
+ As:'سم مشهور بالتاريخ، واستعملوه زمان لتسميم الفيران.',
+ Br:'واحد من عنصرين بس بيكونوا سائلين على حرارة الغرفة، والتاني هو الزئبق.',
+ Kr:'من سنة 1960 لـ 1983، كان المتر معرّف بطول موجة ضو الكريبتون.',
+ Sr:'هو اللي بيعطي الألعاب النارية لونها الأحمر.',
+ Tc:'أول عنصر انصنع بالمختبر، وكل أشكاله مشعّة.',
+ Ag:'أفضل موصل للكهربا وللحرارة بين كل العناصر.',
+ Sn:'البرونز هو نحاس مع قصدير، وعلب «التنك» مطلية فيه.',
+ Sb:'الكحل العربي القديم كان من مركّب الإثمد، وهو كبريتيد الأنتيمون.',
+ I:'جسمك بيحتاجه للغدة الدرقية، ولهيك بيحطّوه بملح الطعام.',
+ Xe:'منه بيعملوا محرّكات أيونية لبعض المركبات الفضائية.',
+ Cs:'الساعات الذرية مبنية عليه، والثانية نفسها معرّفة بذبذبة ذرّة السيزيوم.',
+ Ba:'هو اللي بيعطي الألعاب النارية لونها الأخضر.',
+ Ce:'حجر الولّاعة بيعطي شرار لأن فيه سيريوم.',
+ Nd:'أقوى المغناطيسات الدائمة بالعالم بتنعمل منه، وموجودة بسماعات أذنك.',
+ Eu:'بيضوي تحت الأشعة فوق البنفسجية، وبيستعملوه بأوراق اليورو لكشف التزوير.',
+ W:'أعلى درجة انصهار بين كل المعادن (3422 °C)، وكان خيط اللمبات القديمة.',
+ Os:'أكثف عنصر طبيعي: مكعّب منه بحجم علبة كبريت أتقل من 2 كيلو تقريباً.',
+ Ir:'طبقة صخور غنية بالإيريديوم حول الأرض هي من أهم الأدلة على النيزك اللي قضى على الديناصورات.',
+ Pt:'أحياناً أغلى من الذهب، وبيستعملوه بمحوّلات عوادم السيارات.',
+ Au:'ما بيصدى أبداً. وكل الذهب اللي استخرجه البشر بكل التاريخ بيعبّي تقريباً 4 مسابح أولمبية بس.',
+ Hg:'المعدن الوحيد السائل على حرارة الغرفة، وكانوا يحطّوه بموازين الحرارة.',
+ Pb:'الرومان عملوا منه أنابيب المي، ومن اسمه اللاتيني plumbum إجت كلمة plumber (سبّاك).',
+ Bi:'بلوّراته بتطلع ملوّنة متل قوس قزح وعلى شكل درج.',
+ Po:'اكتشفته ماري كوري وسمّته على اسم بلدها بولندا.',
+ Rn:'غاز مشع بيطلع من الأرض، ما إله لون ولا ريحة.',
+ Fr:'من أندر العناصر الطبيعية: بأي لحظة، في بس حوالي 30 غرام منه بكل قشرة الأرض.',
+ Ra:'بيلمع بالعتمة، واكتشفته ماري وبيير كوري. كانوا يدهنوا فيه عقارب الساعات قبل ما يعرفوا قديش هو خطير.',
+ U:'وقود المفاعلات النووية: غرام واحد من اليورانيوم-235 بيعطي طاقة متل حوالي 3 طن فحم.',
+ Pu:'انصنع بالمختبر سنة 1940، وبيشغّل مسابير فضائية متل فوياجر بالحرارة اللي بيطلّعها.',
+ Es:'لقوه ببقايا أول قنبلة هيدروجينية سنة 1952، وسمّوه على اسم أينشتاين.',
+ Md:'سمّوه على اسم مندلييف، العالم الروسي اللي رتّب الجدول الدوري سنة 1869.',
+ Nh:'أول عنصر اكتشفته دولة آسيوية، واسمه من «نيهون» يعني اليابان.',
+ Og:'أتقل عنصر معروف. ما انصنع منه غير كم ذرّة، وكل وحدة عاشت أقل من جزء من الثانية.'};
+const EL=DATA.trim().split('\n').map((l,i)=>{const f=l.split('|'),num=s=>s===''?null:{v:+s.replace('~',''),est:s[0]==='~'};
+ return{i,z:i+1,s:f[0],n:f[1],en:f[2],mass:f[3],fam:f[4],mp:num(f[5]),bp:num(f[6]),year:+f[7]}});
+const BY={};EL.forEach(e=>{BY[e.s.toLowerCase()]=e});
+
+/* ground-state electron shells: Madelung filling plus the known exceptions */
+const SUB=[[1,0],[2,0],[2,1],[3,0],[3,1],[4,0],[3,2],[4,1],[5,0],[4,2],[5,1],[6,0],[4,3],[5,2],[6,1],[7,0],[5,3],[6,2],[7,1]];
+const CAP=[2,6,10,14],LET='spdf';
+const MOVE={24:[['4s','3d',1]],29:[['4s','3d',1]],41:[['5s','4d',1]],42:[['5s','4d',1]],44:[['5s','4d',1]],45:[['5s','4d',1]],46:[['5s','4d',2]],47:[['5s','4d',1]],
+ 57:[['4f','5d',1]],58:[['4f','5d',1]],64:[['4f','5d',1]],78:[['6s','5d',1]],79:[['6s','5d',1]],89:[['5f','6d',1]],90:[['5f','6d',2]],91:[['5f','6d',1]],92:[['5f','6d',1]],93:[['5f','6d',1]],96:[['5f','6d',1]],103:[['6d','7p',1]]};
+function config(z){const occ={};let left=z;for(const[n,l]of SUB){if(!left)break;const k=Math.min(CAP[l],left);occ[n+LET[l]]=k;left-=k}
+ (MOVE[z]||[]).forEach(([a,b,k])=>{occ[a]=(occ[a]||0)-k;occ[b]=(occ[b]||0)+k;if(!occ[a])delete occ[a]});
+ const shells=[];Object.entries(occ).forEach(([k,v])=>{const n=+k[0];shells[n-1]=(shells[n-1]||0)+v});return{occ,shells:Array.from(shells,v=>v||0)}}
+const SUP='⁰¹²³⁴⁵⁶⁷⁸⁹',sup=n=>String(n).split('').map(d=>SUP[d]).join('');
+const NOBLE=[[86,'Rn'],[54,'Xe'],[36,'Kr'],[18,'Ar'],[10,'Ne'],[2,'He']];
+function cfgText(z){const{occ}=config(z),core=NOBLE.find(([c])=>c<z);let base={},pre='';if(core){base=config(core[0]).occ;pre='['+core[1]+'] '}
+ const keys=Object.keys(occ).filter(k=>occ[k]!==(base[k]||0)).sort((a,b)=>(+a[0]-+b[0])||(LET.indexOf(a[1])-LET.indexOf(b[1])));
+ return pre+keys.map(k=>k+sup(occ[k]-(base[k]||0))).join(' ')}
+EL.forEach(e=>{e.shells=config(e.z).shells;e.cfg=cfgText(e.z);const a=parseFloat(e.mass.replace(/[\[\]]/g,''));e.nn=Math.max(0,Math.round(a)-e.z)});
+
+/* ---------- table geometry ---------- */
+function cell(z){
+ if(z===1)return[1,1];if(z===2)return[18,1];
+ if(z<=4)return[z-2,2];if(z<=10)return[z+8,2];
+ if(z<=12)return[z-10,3];if(z<=18)return[z,3];
+ if(z<=36)return[z-18,4];if(z<=54)return[z-36,5];
+ if(z<=56)return[z-54,6];if(z<=71)return[z-54,8.6];if(z<=86)return[z-68,6];
+ if(z<=88)return[z-86,7];if(z<=103)return[z-86,9.6];return[z-100,7]}
+const CW=140,CH=180,TW=18*CW+20,TH=9.6*CH+20,RY=5.3;
+const tpos=(col,row)=>({x:(col-9.5)*CW,y:(row-RY)*CH,z:0,ry:0,rx:0});
+EL.forEach(e=>{const[col,row]=cell(e.z);e.tp=tpos(col,row)});
+
+/* discovery timeline: one column group per period, stacked upward, oldest on the left */
+const BINS=[['قديم',y=>y===0],['قبل 1700',y=>y<1700],['1700–1749',y=>y<1750],['1750–1774',y=>y<1775],['1775–1799',y=>y<1800],['1800–1824',y=>y<1825],['1825–1849',y=>y<1850],
+ ['1850–1874',y=>y<1875],['1875–1899',y=>y<1900],['1900–1924',y=>y<1925],['1925–1949',y=>y<1950],['1950–1974',y=>y<1975],['1975–1999',y=>y<2000],['2000+',()=>true]];
+const DISC=(()=>{const groups=BINS.map(()=>[]);EL.forEach(e=>{groups[BINS.findIndex(([,t])=>t(e.year))].push(e)});
+ const cols=groups.map(g=>Math.max(1,Math.ceil(g.length/10))),gap=40,W=cols.reduce((a,c)=>a+c*CW,0)+gap*(BINS.length-1);
+ const pos=[],labels=[];let x=-W/2;const base=4.2*CH;
+ groups.forEach((g,b)=>{g.sort((p,q)=>p.year-q.year||p.z-q.z).forEach((e,j)=>{pos[e.i]={x:x+(Math.floor(j/10)+.5)*CW,y:base-(j%10)*CH-CH*.5,z:0,ry:0,rx:0}});
+  labels.push({t:BINS[b][0],x:x+cols[b]*CW/2,y:base+30,ar:b<2});x+=cols[b]*CW+gap});
+ return{pos,labels,W,H:10*CH+120}})();
+
+/* ---------- states of matter ---------- */
+const stateAt=(e,T)=>{if(!e.mp)return 'u';if(T<e.mp.v)return e.mp.v===0?'l':'s';if(!e.bp)return 'u';if(T<e.bp.v)return 'l';return 'g'};
+const ST={s:['صلب','■'],l:['سائل','≈'],g:['غاز','◌'],u:['غير معروف','?']};
+let T=298.15;
+const toC=k=>Math.round(k-273.15);
+const fmtC=k=>{const c=toC(k);return (c<0?'−':'')+Math.abs(c).toLocaleString('en-US')+' °C'};
+const fmtPt=p=>p?(p.est?'~':'')+fmtC(p.v):'غير معروف';
+
+/* ---------- world: tiles, key, ghosts, timeline labels ---------- */
+const camEl=$('cam'),stage=$('stage');
+const symSize=s=>s.length===1?58:54;
+EL.forEach(e=>{const d=document.createElement('div');d.className='el';d.dataset.i=e.i;d.style.setProperty('--c',FAM[e.fam].rgb);
+ d.innerHTML=`<span class="z">${e.z}</span><span class="st"></span><span class="sy">${e.s}</span><span class="nm">${e.n}</span><span class="ms">${e.mass}</span>`;
+ d.querySelector('.sy').style.fontSize=symSize(e.s)+'px';camEl.appendChild(d);e.d=d;e.dst=d.querySelector('.st');
+ e.cur={x:R(-2400,2400),y:R(-1600,1600),z:R(-2400,2400),ry:R(-3,3),rx:R(-2,2)};e.moving=false;place(e)});
+const key=document.createElement('div');key.id='key';
+key.innerHTML=`<div><div class="kt">الجدول الدوري للعناصر</div><div class="ks">118 عنصر مرتّبين حسب عدد البروتونات بنواتهم. المس أي عنصر لتشوف ذرّته.</div><div class="kb" id="kb"></div></div>
+ <div class="kx"><div class="el"><span class="z">Z</span><span class="st"></span><span class="sy">Fe</span><span class="nm">الاسم</span><span class="ms">55.845</span></div>
+ <span class="l1">العدد الذرّي</span><span class="l3">الرمز</span><span class="l4">الاسم</span><span class="l5">الكتلة الذرّية</span></div>`;
+camEl.appendChild(key);
+key.style.transform=`translate3d(${(7.5-9.5)*CW}px,${(2-RY)*CH}px,0px)`;
+const ghosts=[[3,6,'57–71'],[3,7,'89–103']].map(([col,row,t])=>{const g=document.createElement('div');g.className='ghost';g.textContent=t;const p=tpos(col,row);g.style.transform=`translate3d(${p.x}px,${p.y}px,0px)`;camEl.appendChild(g);return g});
+const tls=DISC.labels.map(l=>{const d=document.createElement('div');d.className='tl'+(l.ar?' ar':'');d.textContent=l.t;d.style.transform=`translate3d(${l.x}px,${l.y}px,0px)`;d.style.opacity=0;camEl.appendChild(d);return d});
+function place(e){const p=e.cur;e.d.style.transform=`translate3d(${p.x.toFixed(1)}px,${p.y.toFixed(1)}px,${p.z.toFixed(1)}px) rotateY(${p.ry.toFixed(4)}rad) rotateX(${p.rx.toFixed(4)}rad)`}
+
+/* ---------- layouts ---------- */
+const is3D=v=>v==='sphere'||v==='helix';
+const flatV=v=>v==='table'||v==='states';
+const facing=(x,y,z)=>{const l=Math.hypot(x,y,z)||1;return{ry:Math.atan2(x/l,z/l),rx:-Math.asin(clamp(y/l,-1,1))}};
+const stateZ=e=>{const s=e.state;return s==='g'?170:s==='l'?45:0};
+const LAY={
+ table:()=>EL.map(e=>({...e.tp})),
+ states:()=>EL.map(e=>({...e.tp,z:stateZ(e)})),
+ disc:()=>EL.map(e=>({...DISC.pos[e.i]})),
+ sphere:()=>{const n=EL.length;return EL.map((e,i)=>{const phi=Math.acos(-1+2*i/(n-1)),th=Math.sqrt(n*Math.PI)*phi,r=820,
+  x=r*Math.sin(phi)*Math.sin(th),y=-r*Math.cos(phi),z=r*Math.sin(phi)*Math.cos(th);return{x,y,z,...facing(x,y,z)}})},
+ helix:()=>EL.map((e,i)=>{const th=i*.175+Math.PI,r=900,x=r*Math.sin(th),z=r*Math.cos(th);return{x,y:(i-EL.length/2)*8,z,ry:Math.atan2(x,z),rx:0}})
+};
+let view='scatter',now=performance.now()/1000;
+function setView(v,quick){view=v;const L=LAY[v]();EL.forEach((e,i)=>{e.from={...e.cur};e.to=L[i];e.t0=now+(quick?0:Math.random()*.35);e.dur=quick?.9:1.3+Math.random()*1.1;e.moving=true});
+ stage.classList.toggle('states',v==='states');const f=flatV(v);key.style.opacity=f?1:0;ghosts.forEach(g=>g.style.opacity=f?1:0);tls.forEach(t=>t.style.opacity=v==='disc'?1:0);
+ $('temp').hidden=v!=='states'||sel>=0;
+ document.querySelectorAll('#views button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.v===v)));
+ requestAnimationFrame(()=>{measure();if(sel>=0&&!is3D(v))focusCam(sel);else camHome()})}
+function popPose(){const y=cam.yaw,p=cam.pitch,sT=clamp(Math.min(W*.36,190)/120,.8,1.6),w=P*(1-1/sT)+P/cam.s-P;
+ return{x:cam.tx-w*Math.cos(p)*Math.sin(y),y:cam.ty+w*Math.sin(p),z:cam.tz+w*Math.cos(p)*Math.cos(y),ry:-y,rx:-p}}
+function sendHome(i){const e=EL[i];e.from={...e.cur};e.to=LAY[view]()[i];e.t0=now;e.dur=.9;e.moving=true}
+function tilesStep(dt){const kp=1-Math.exp(-dt*7);EL.forEach(e=>{
+ if(e.i===sel&&is3D(view)&&now>=e.t0+.15){const g=popPose(),p=e.cur;e.moving=false;p.x+=(g.x-p.x)*kp;p.y+=(g.y-p.y)*kp;p.z+=(g.z-p.z)*kp;p.ry+=angD(g.ry,p.ry)*kp;p.rx+=(g.rx-p.rx)*kp;place(e);return}
+ if(e.moving){const k=clamp((now-e.t0)/e.dur,0,1),q=ease(k),f=e.from,t=e.to,p=e.cur;
+  p.x=lerp(f.x,t.x,q);p.y=lerp(f.y,t.y,q);p.z=lerp(f.z,t.z,q);p.ry=f.ry+angD(t.ry,f.ry)*q;p.rx=lerp(f.rx,t.rx,q);place(e);if(k>=1)e.moving=false}
+ else if(view==='states'){const bob=e.state==='g'&&!reduce?Math.sin(now*1.3+e.z*.7)*22:0,z=stateZ(e)+bob;if(Math.abs(z-e.cur.z)>.4){e.cur.z+=(z-e.cur.z)*Math.min(1,dt*4);place(e)}}})}
+
+/* ---------- camera (CSS: translateZ(-D) rotateX(pitch) rotateY(yaw) translate(-target)) ---------- */
+const P=1200;
+const cam={tx:0,ty:0,tz:0,yaw:.6,pitch:.25,s:.2},goal={tx:0,ty:0,tz:0,yaw:.6,pitch:.25,s:.2};
+let W=innerWidth,H=innerHeight,vTop=0,vBot=0,oy=0,lastUser=-99,started=false;
+function measure(){W=innerWidth;H=innerHeight;const t=$('top').getBoundingClientRect(),cd=$('card'),bt=$('bottom').getBoundingClientRect(),qz=$('quiz');
+ vTop=started?(qz.hidden?t.bottom:qz.getBoundingClientRect().bottom):0;vBot=started?(cd.hidden?H-bt.top:H-cd.getBoundingClientRect().top+8):0;oy=(vTop-vBot)/2}
+const fitS=(w,h)=>Math.min((W-24)/w,Math.max(120,H-vTop-vBot-16)/h);
+const EXT={table:30,states:260,disc:30,sphere:900,helix:980,scatter:3200};
+const sMax=()=>Math.min(4,P/((sel>=0&&!is3D(view)?140:EXT[view])+150));
+const sMin=()=>fitS(5200,5200)*.8;
+function camHome(){const g=goal;g.tx=0;g.ty=0;g.tz=0;
+ if(view==='table'){g.yaw=0;g.pitch=0;g.s=fitS(TW,TH)}
+ else if(view==='states'){g.yaw=-.2;g.pitch=.42;g.s=fitS(TW,TH)*.97}
+ else if(view==='disc'){g.yaw=0;g.pitch=0;g.s=fitS(DISC.W+60,DISC.H);g.ty=-40}
+ else if(view==='sphere'){g.yaw=0;g.pitch=.15;g.s=fitS(1900,1900)}
+ else if(view==='helix'){g.yaw=0;g.pitch=.18;g.s=fitS(2000,1250)}
+ else{g.yaw=cam.yaw;g.pitch=.25;g.s=fitS(5200,4000)}}
+function focusCam(i){if(is3D(view))return;const e=EL[i],t=e.moving?e.to:e.cur;goal.tx=t.x;goal.ty=t.y;goal.tz=t.z;goal.yaw=view==='states'?-.12:0;goal.pitch=view==='states'?.2:0;
+ goal.s=clamp(fitS(CW*3.4,CH*2.6),.35,2.4)}
+function camStep(dt){const k=1-Math.exp(-dt*3.2),g=goal;
+ if(started&&sel<0&&now-lastUser>5&&is3D(view))g.yaw+=dt*.12;
+ if(!started)g.yaw+=dt*.05;
+ if(started&&sel<0&&now-lastUser>5&&view==='states')g.yaw=-.2+Math.sin(now*.25)*.08;
+ cam.tx+=(g.tx-cam.tx)*k;cam.ty+=(g.ty-cam.ty)*k;cam.tz+=(g.tz-cam.tz)*k;cam.yaw+=angD(g.yaw,cam.yaw)*k;cam.pitch+=(g.pitch-cam.pitch)*k;
+ cam.s=Math.exp(lerp(Math.log(cam.s),Math.log(g.s),k));
+ const D=P/cam.s-P;
+ stage.style.perspectiveOrigin=`50% calc(50% + ${oy.toFixed(1)}px)`;camEl.style.top=`calc(50% + ${oy.toFixed(1)}px)`;
+ camEl.style.transform=`translateZ(${(-D).toFixed(1)}px) rotateX(${cam.pitch.toFixed(4)}rad) rotateY(${cam.yaw.toFixed(4)}rad) translate3d(${(-cam.tx).toFixed(1)}px,${(-cam.ty).toFixed(1)}px,${(-cam.tz).toFixed(1)}px)`}
+addEventListener('resize',()=>{measure();if(sel>=0&&!is3D(view))focusCam(sel);else camHome()});
+
+/* ---------- temperature ---------- */
+const tR=$('tR');
+const v2T=v=>6500*Math.pow(v/1000,2),T2v=t=>Math.round(1000*Math.sqrt(t/6500));
+function applyT(t){T=t;const n={s:0,l:0,g:0,u:0};EL.forEach(e=>{const s=stateAt(e,T);n[s]++;if(e.state!==s){e.state=s;e.d.classList.remove('ss','sl','sg','su');e.d.classList.add('s'+s);e.dst.textContent=ST[s][1]}});
+ $('tC').textContent=fmtC(T);$('tK').textContent=Math.round(T).toLocaleString('en-US')+' K';
+ $('tC').style.color=T<273?'var(--cold)':T>1500?'var(--hot)':'var(--ink)';
+ $('tN').innerHTML=`صلب <b>${n.s}</b> · سائل <b>${n.l}</b> · غاز <b>${n.g}</b> · غير معروف <b>${n.u}</b>`;
+ const notGas=EL.filter(e=>e.state==='l'||e.state==='s'),liq=EL.filter(e=>e.state==='l');let note='';
+ if(T<1)note='على الصفر المطلق كل شي متجمّد… إلا الهيليوم، بيضل سائل!';
+ else if(T>=4000&&notGas.length&&notGas.length<=8)note=`حتى على هالحرارة، لسا ${notGas.map(e=>e.n).join(' و')} ما صاروا غاز.`;
+ else if(liq.length&&liq.length<=3)note=`السائلين هلأ: ${liq.map(e=>e.n).join(' و')}.`;
+ $('tNote').textContent=note;if(sel>=0)cardStats()}
+tR.addEventListener('input',()=>{lastUser=now;applyT(v2T(+tR.value))});
+document.querySelectorAll('.tpre button').forEach(b=>b.addEventListener('click',()=>{lastUser=now;const t=+b.dataset.k;tR.value=T2v(t);applyT(t)}));
+applyT(T);tR.value=T2v(T);
+
+/* ---------- atom ---------- */
+const atomCv=$('atom'),ax=atomCv.getContext('2d');let atomEl=null,nucleus=[];
+function atomFor(e){atomEl=e;const A=e.z+e.nn,k=Math.min(A,48);nucleus=[];
+ for(let i=0;i<k;i++){const r=Math.cbrt(i/k)*1,a=i*2.399963,h=1-2*(i+.5)/k,rr=Math.sqrt(1-h*h);nucleus.push({x:Math.cos(a)*rr*r,y:h*r,z:Math.sin(a)*rr*r,p:i<k*e.z/A})}
+ nucleus.sort((a,b)=>a.z-b.z)}
+function atomDraw(){if(!atomEl||$('card').hidden)return;const dpr=Math.min(2,devicePixelRatio||1),w=atomCv.clientWidth,h=atomCv.clientHeight;
+ if(atomCv.width!==Math.round(w*dpr)){atomCv.width=Math.round(w*dpr);atomCv.height=Math.round(h*dpr)}
+ ax.setTransform(dpr,0,0,dpr,0,0);ax.clearRect(0,0,w,h);const cx=w/2,cy=h/2,sh=atomEl.shells,ns=sh.length,c=FAM[atomEl.fam].rgb,maxR=w/2-6,t=now;
+ const ring=n=>{const rx=maxR*(.28+.72*(n+1)/ns)*(ns===1?.7:1),tilt=.5+.35*Math.sin(n*1.7),rot=n*1.05+.3;return{rx,ry:rx*tilt,rot}};
+ const dots=[];
+ sh.forEach((cnt,n)=>{const{rx,ry,rot}=ring(n);ax.save();ax.translate(cx,cy);ax.rotate(rot);ax.strokeStyle=`rgba(${c},.28)`;ax.lineWidth=1;ax.beginPath();ax.ellipse(0,0,rx,ry,0,0,TAU);ax.stroke();ax.restore();
+  const om=(reduce?0:1.7)/(n+1);for(let k=0;k<cnt;k++){const a=t*om+TAU*k/cnt,x=Math.cos(a)*rx,y=Math.sin(a)*ry,X=cx+x*Math.cos(rot)-y*Math.sin(rot),Y=cy+x*Math.sin(rot)+y*Math.cos(rot);dots.push({X,Y,front:Math.sin(a)>0})}});
+ const dot=d=>{ax.fillStyle=d.front?'#e9f6ff':'rgba(200,220,255,.45)';ax.shadowColor='rgba(143,200,255,.9)';ax.shadowBlur=d.front?8:0;ax.beginPath();ax.arc(d.X,d.Y,d.front?2.6:2,0,TAU);ax.fill();ax.shadowBlur=0};
+ dots.filter(d=>!d.front).forEach(dot);
+ const nr=Math.min(maxR*.22,5+Math.cbrt(atomEl.z+atomEl.nn)*2.1),br=Math.max(2.2,nr*.42);
+ ax.fillStyle=`rgba(${c},.25)`;ax.beginPath();ax.arc(cx,cy,nr*1.5,0,TAU);ax.fill();
+ nucleus.forEach(b=>{const X=cx+b.x*nr,Y=cy+b.y*nr,g=ax.createRadialGradient(X-br*.35,Y-br*.35,br*.1,X,Y,br);
+  g.addColorStop(0,b.p?'#ffb3a8':'#e3e6ee');g.addColorStop(1,b.p?'#d2453a':'#7b8194');ax.fillStyle=g;ax.beginPath();ax.arc(X,Y,br,0,TAU);ax.fill()});
+ dots.filter(d=>d.front).forEach(dot)}
+
+/* ---------- selection + card ---------- */
+function select(i){if(sel>=0){EL[sel].d.classList.remove('sel');if(is3D(view)&&sel!==i)sendHome(sel)}sel=i;lastUser=now;const card=$('card');
+ if(i<0){card.classList.remove('on');setTimeout(()=>{if(sel<0){card.hidden=true;$('bottom').hidden=false;$('temp').hidden=view!=='states';measure();camHome()}},300);return}
+ const e=EL[i],f=FAM[e.fam];e.d.classList.add('sel');
+ card.hidden=false;$('bottom').hidden=true;card.style.setProperty('--c',f.rgb);$('ctile').style.setProperty('--c',f.rgb);
+ $('mz').textContent=e.z;$('msy').textContent=e.s;$('mms').textContent=e.mass;$('ck').textContent=f.n;$('cn').textContent=e.n;$('cen').textContent=`${e.en} · ${e.s}`;
+ cardStats();$('cf').textContent=FACTS[e.s]||autoFact(e);atomFor(e);
+ void card.offsetWidth;card.classList.add('on');requestAnimationFrame(()=>{measure();focusCam(i)})}
+function cardStats(){const e=EL[sel],s=stateAt(e,T),yr=e.year?String(e.year):'قديم';
+ $('cs').innerHTML=`<div><span>البروتونات</span><b>${e.z}</b></div><div><span>النيوترونات تقريباً</span><b>${e.nn}</b></div>`+
+  `<div><span>الانصهار</span><b>${e.s==='He'?'ما بيتجمّد':e.mp&&e.bp&&e.mp.v===e.bp.v?'بيتسامى':fmtPt(e.mp)}</b></div><div><span>الغليان</span><b>${fmtPt(e.bp)}</b></div>`+
+  `<div><span>الحالة</span><b class="ar">${ST[s][0]} على ${iso(fmtC(T))}</b></div><div><span>الاكتشاف</span><b class="ar">${yr}</b></div>`+
+  `<div class="wide"><span>التوزيع الإلكتروني</span><b class="cfg">${e.cfg}</b></div><div class="wide"><span>الإلكترونات بكل غلاف</span><b>${e.shells.join(' · ')}</b></div>`}
+function autoFact(e){const f=FAM[e.fam].n,y=e.year;
+ if(e.z>=104)return `من العناصر فائقة الثقل اللي بتنصنع بمسرّعات الجسيمات. ما انصنع منه غير كم ذرّة بتعيش لحظات، فأغلب خصائصه متوقّعة مش مقاسة. اكتُشف سنة ${y}.`;
+ if(e.z>92)return `عنصر صناعي من ${f}، أتقل من اليورانيوم ومشع. انصنع أول مرة سنة ${y}.`;
+ return `من ${f}. ${y?`اكتُشف سنة ${y}`:'معروف من العصور القديمة'}، وعلى حرارة الغرفة هو ${ST[stateAt(e,298.15)][0]}.`}
+$('cx').addEventListener('click',()=>select(-1));
+
+/* ---------- legend, search ---------- */
+let filt=null,query='';
+const legend=$('legend');
+Object.entries(FAM).forEach(([k,v])=>{const b=document.createElement('button');b.type='button';b.dataset.k=k;b.style.setProperty('--c',v.rgb);b.setAttribute('aria-pressed','false');
+ b.innerHTML=`<i></i>${v.n} <em>${EL.filter(e=>e.fam===k).length}</em>`;b.addEventListener('click',()=>{lastUser=now;filt=filt===k?null:k;applyDim()});legend.appendChild(b)});
+const norm=s=>s.toLowerCase().replace(/[أإآ]/g,'ا').replace(/ة/g,'ه').replace(/ى/g,'ي').replace(/^ال/,'').trim();
+const matches=(e,q)=>String(e.z)===q||e.s.toLowerCase()===q||norm(e.n).includes(q)||e.en.toLowerCase().startsWith(q)||norm(FAM[e.fam].n).includes(q);
+function applyDim(){const q=norm(query);EL.forEach(e=>e.d.classList.toggle('dim',!!(filt&&e.fam!==filt)||!!(q&&!matches(e,q))));
+ legend.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.k===filt)))}
+const find=$('find');
+find.addEventListener('input',()=>{query=find.value;lastUser=now;applyDim()});
+find.addEventListener('keydown',e=>{if(e.key!=='Enter')return;const q=norm(find.value);if(!q)return;
+ const hit=EL.find(x=>String(x.z)===q||x.s.toLowerCase()===q)||EL.find(x=>matches(x,q));if(hit){find.blur();if(quiz.on)return;select(hit.i)}});
+
+/* ---------- quiz: names hidden, find the element by its Arabic name ---------- */
+const POOL='H He Li C N O F Ne Na Mg Al Si P S Cl Ar K Ca Ti Cr Fe Co Ni Cu Zn Br Kr Ag Sn I Xe Pt Au Hg Pb Ra U Pu'.split(' ');
+const quiz={on:false,qs:[],i:0,score:0,busy:false,next:0};
+const withAl=n=>'ال'+n;
+function quizStart(){select(-1);quiz.on=true;quiz.qs=POOL.slice().sort(()=>Math.random()-.5).slice(0,8).map(s=>BY[s.toLowerCase()]);quiz.i=0;quiz.score=0;quiz.busy=false;
+ stage.classList.add('quiz');$('quiz').hidden=false;$('qbtn').setAttribute('aria-pressed','true');if(view!=='table')setView('table');else requestAnimationFrame(()=>{measure();camHome()});quizAsk()}
+function quizEnd(){quiz.on=false;stage.classList.remove('quiz');$('quiz').hidden=true;$('qbtn').setAttribute('aria-pressed','false');EL.forEach(e=>e.d.classList.remove('ok','bad'));requestAnimationFrame(()=>{measure();camHome()})}
+function quizAsk(){const e=quiz.qs[quiz.i];$('qq').textContent=`وين ${withAl(e.n)}؟`;$('qs').textContent=`سؤال ${quiz.i+1} من ${quiz.qs.length} · النقاط ${quiz.score}`;
+ const f=$('qf');f.textContent='الأسماء مخبّاية. اعرفه من رمزه ومكانه.';f.className='';$('qa').hidden=true;EL.forEach(x=>x.d.classList.remove('ok','bad'))}
+function quizAnswer(i){if(quiz.busy||quiz.i>=quiz.qs.length)return;const want=quiz.qs[quiz.i],got=EL[i],ok=got===want;quiz.busy=true;quiz.next=now+2.4;
+ if(ok){quiz.score++;got.d.classList.add('ok');try{navigator.vibrate&&navigator.vibrate(40)}catch(e){}}else{got.d.classList.add('bad');want.d.classList.add('ok')}
+ const f=$('qf');f.textContent=ok?`صح! ${withAl(want.n)} رمزه ${iso(want.s)}`:`لا، هاد ${withAl(got.n)} (${iso(got.s)}). ${withAl(want.n)} رمزه ${iso(want.s)}`;f.className=ok?'good':'bad';
+ $('qs').textContent=`سؤال ${quiz.i+1} من ${quiz.qs.length} · النقاط ${quiz.score}`}
+function quizStep(){if(!quiz.on||!quiz.busy||now<quiz.next)return;quiz.busy=false;quiz.i++;
+ if(quiz.i<quiz.qs.length){quizAsk();return}
+ EL.forEach(x=>x.d.classList.remove('ok','bad'));const n=quiz.qs.length;$('qq').textContent='خلصت!';$('qs').textContent='';
+ const f=$('qf');f.textContent=`جبت ${quiz.score} من ${n}`+(quiz.score===n?'، عالِم كيمياء!':quiz.score>=5?'، حلو كتير!':'، جرّب كمان مرة');f.className='good';$('qa').hidden=false;
+ if(quiz.score===n)toast('علامة كاملة! ⚛')}
+$('qbtn').addEventListener('click',()=>{lastUser=now;quiz.on?quizEnd():quizStart()});
+$('qx').addEventListener('click',()=>{lastUser=now;quizEnd()});$('qa').addEventListener('click',quizStart);
+
+/* ---------- hint, toast ---------- */
+let hintT=0,toastT=0;
+function hint(text,ms){const h=$('hint');h.textContent=text;h.classList.add('on');clearTimeout(hintT);hintT=setTimeout(()=>h.classList.remove('on'),ms||6000)}
+function toast(text){const t=$('toast');t.textContent=text;t.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('on'),2600)}
+
+/* ---------- views ---------- */
+document.querySelectorAll('#views button').forEach(b=>b.addEventListener('click',()=>{lastUser=now;const v=b.dataset.v;if(v===view)return;if(quiz.on&&v!=='table')quizEnd();
+ setView(v);if(v==='states'&&!store.get('pe.statesSeen')){store.set('pe.statesSeen',1);hint('اسحب مؤشر الحرارة: العناصر السائلة بتتموّج، والغازات بتطلع لقدّام وبتطوف.',7000)}}));
+
+/* ---------- input: drag pans the flat views and turns the 3D ones, pinch/wheel zoom, tap picks ---------- */
+const ptrs=new Map();let down=null,pinch0=0,s0=1,lastTap=0;
+const pd=()=>{const a=[...ptrs.values()];return Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)};
+stage.addEventListener('pointerdown',e=>{try{stage.setPointerCapture(e.pointerId)}catch(_){}ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+ if(ptrs.size===1)down={x:e.clientX,y:e.clientY,moved:false};if(ptrs.size===2){pinch0=pd();s0=goal.s;if(down)down.moved=true}});
+stage.addEventListener('pointermove',e=>{const p=ptrs.get(e.pointerId);if(!p)return;const dx=e.clientX-p.x,dy=e.clientY-p.y;p.x=e.clientX;p.y=e.clientY;
+ if(ptrs.size===1&&down){if(Math.hypot(e.clientX-down.x,e.clientY-down.y)>7)down.moved=true;if(!down.moved)return;lastUser=now;
+  if(!is3D(view)){goal.tx-=dx/cam.s;goal.ty-=dy/cam.s;cam.tx-=dx/cam.s;cam.ty-=dy/cam.s}
+  else{goal.yaw+=dx*.005;goal.pitch=clamp(goal.pitch-dy*.004,-1.2,1.2);cam.yaw+=dx*.005;cam.pitch=clamp(cam.pitch-dy*.004,-1.2,1.2)}}
+ else if(ptrs.size===2&&pinch0>0){goal.s=clamp(s0*pd()/pinch0,sMin(),sMax());lastUser=now}});
+const up=e=>{if(!ptrs.has(e.pointerId))return;ptrs.delete(e.pointerId);
+ if(!ptrs.size&&down&&!down.moved&&started)onTap(e.clientX,e.clientY);
+ if(!ptrs.size)down=null;if(ptrs.size<2)pinch0=0};
+stage.addEventListener('pointerup',up);stage.addEventListener('pointercancel',up);
+stage.addEventListener('wheel',e=>{e.preventDefault();lastUser=now;goal.s=clamp(goal.s*Math.exp(-e.deltaY*.0015),sMin(),sMax())},{passive:false});
+function onTap(x,y){const hit=document.elementsFromPoint(x,y).find(n=>n.classList&&n.classList.contains('el')&&n.dataset.i!=null);
+ if(hit){if(quiz.on)quizAnswer(+hit.dataset.i);else select(+hit.dataset.i);return}
+ if(now-lastTap<.32){lastTap=0;if(sel>=0)select(-1);else camHome();return}lastTap=now;if(sel>=0)select(-1)}
+addEventListener('keydown',e=>{if(!started||e.target.tagName==='INPUT')return;
+ if(e.key==='Escape'){if(quiz.on)quizEnd();else select(-1)}else if(e.key==='/'){e.preventDefault();find.focus()}
+ else if(/^[1-5]$/.test(e.key)){const v=['table','states','disc','sphere','helix'][+e.key-1];if(v!==view){if(quiz.on&&v!=='table')quizEnd();setView(v)}}
+ else if(sel>=0&&(e.key==='ArrowLeft'||e.key==='ArrowRight')){select((sel+(e.key==='ArrowLeft'?1:-1)+EL.length)%EL.length)}});
+
+/* ---------- background: faint drifting molecules ---------- */
+const bg=$('bg'),bx=bg.getContext('2d');const BPR=Math.min(2,devicePixelRatio||1);let nodes=[];
+function bgSize(){bg.width=innerWidth*BPR;bg.height=innerHeight*BPR;const n=touch?26:46,cols=Object.values(FAM).map(k=>k.rgb);
+ nodes=Array.from({length:n},()=>({x:Math.random()*innerWidth,y:Math.random()*innerHeight,vx:R(-6,6),vy:R(-6,6),r:R(1.2,3),c:cols[Math.floor(Math.random()*cols.length)]}))}
+bgSize();addEventListener('resize',bgSize);
+function bgStep(dt){const w=innerWidth,h=innerHeight;bx.setTransform(BPR,0,0,BPR,0,0);bx.clearRect(0,0,w,h);
+ for(const p of nodes){if(!reduce){p.x+=p.vx*dt;p.y+=p.vy*dt}if(p.x<-20)p.x=w+20;if(p.x>w+20)p.x=-20;if(p.y<-20)p.y=h+20;if(p.y>h+20)p.y=-20}
+ bx.lineWidth=1;for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){const a=nodes[i],b=nodes[j],d=Math.hypot(a.x-b.x,a.y-b.y);if(d<150){bx.strokeStyle=`rgba(${a.c},${(1-d/150)*.16})`;bx.beginPath();bx.moveTo(a.x,a.y);bx.lineTo(b.x,b.y);bx.stroke()}}
+ for(const p of nodes){bx.fillStyle=`rgba(${p.c},.5)`;bx.beginPath();bx.arc(p.x,p.y,p.r,0,TAU);bx.fill()}}
+
+/* ---------- start ---------- */
+const solidsAtRoom=EL.filter(e=>stateAt(e,298.15)==='s').length;
+$('kb').textContent=`على حرارة الغرفة: ${solidsAtRoom} صلب، 2 سائل، 11 غاز`;
+function start(){if(started)return;started=true;$('veil').classList.add('out');$('top').classList.add('on');$('bottom').classList.add('on');
+ requestAnimationFrame(()=>{measure();setView('table')});
+ setTimeout(()=>{if(!$('hint').classList.contains('on'))hint(touch?'قرّب بإصبعين · اسحب · المس أي عنصر لتشوف ذرّته · بالعرض بيبيّن أحسن':'العجلة للتقريب · اسحب · اضغط على أي عنصر · الأرقام 1 لـ 5 بتبدّل الشكل',8000)},2600)}
+$('go').addEventListener('click',start);
+
+/* ---------- loop ---------- */
+camHome();
+let last=performance.now();
+function loop(t){const dt=Math.min(.05,(t-last)/1000);last=t;now=t/1000;
+ tilesStep(dt);camStep(dt);bgStep(dt);atomDraw();quizStep();
+ requestAnimationFrame(loop)}
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

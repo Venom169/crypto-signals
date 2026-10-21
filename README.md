@@ -11,4 +11,7 @@ The same live market laid out as a periodic table of 118 "elements", one per Bin
 
 It is a single HTML file using CSS 3D (no WebGL) and the same three data sources as Crypto Cosmos.
 
+## Periodic Table of the Elements (`web/periodic-elements.html`)
+The real chemistry table on the same CSS 3D engine, in Arabic and fully offline (no market data). 118 elements colored by family, flying between five views: table; states of matter, where a temperature dial from absolute zero to the Sun's surface melts tiles into sloshing liquids and boils them into floating gases; a discovery timeline from antiquity to 2010; sphere; and helix. Tapping an element opens a card with an animated Bohr atom, its electron configuration (Madelung order plus the known exceptions), melting and boiling points, discovery year and a short fact. A quiz hides the names and asks you to find elements by their Arabic name.
+
 For learning only, not financial advice.
