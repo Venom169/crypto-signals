@@ -4,6 +4,9 @@ indicator("Gold Liquidity Map", shorttitle = "GLM", overlay = true, max_lines_co
 // ═════════════════════════════════════════════════════════════════════════════════════════
 // Gold Liquidity Map (GLM) - XAUUSD 15m.  Stage 5 of 6: levels, sweeps, grade, reading panel,
 // virtual trades, the live statistics table, the results table and alerts.
+// Stage 7 (LIQUIDITY_ADDITIONS_SUGGESTIONS.md, priorities 1 and 2): context tags on every signal, the
+// context lab table, equal highs / lows, session / Monday / month levels, round-number and LBMA lines.
+// None of it changes a signal, a grade or the other tables unless "Use session ... in sweeps" is on.
 // Spec:  GOLD_LIQUIDITY_INDICATOR_SPEC.md  (2.1-2.7, 4.3-4.11)
 // Logic: research/sweep_engine.py is the reference; when in doubt, the code there decides.
 // No repaint: the engine runs on confirmed bars only, every higher-timeframe value comes from
@@ -73,6 +76,23 @@ string resPos           = input.string("Middle right", "", options = ["Top left"
 string resSize          = input.string("Small", "", options = ["Tiny", "Small", "Normal", "Large"], group = GB, inline = "res", display = display.none)
 float  labelGap         = input.float(2.0, "Min spacing of the labels on the right ($), 0 = off", minval = 0.0, step = 0.5, group = GD, display = display.none)
 int    drawChart        = input.int(12, "Chart-TF (15m) levels drawn per side, max", minval = 0, maxval = 100, group = GL, display = display.none)
+// Stage 7
+bool   showLab          = input.bool(true, "Context lab", group = GB, inline = "lab", display = display.none)
+string labPos           = input.string("Bottom left", "", options = ["Top left", "Top center", "Top right", "Middle left", "Middle center", "Middle right", "Bottom left", "Bottom center", "Bottom right"], group = GB, inline = "lab", display = display.none)
+string labSize          = input.string("Small", "", options = ["Tiny", "Small", "Normal", "Large"], group = GB, inline = "lab", display = display.none)
+string labBy            = input.string("Grade", "Context lab: break down by", options = ["Grade", "Session", "Time window", "Level type", "Sweep type", "SMT", "Premium/Discount", "Volume", "Round number", "Equal levels", "Trend"], group = GB, display = display.none)
+string silverSym        = input.string("", "SMT: silver symbol (empty = XAGUSD of this broker)", group = GC, display = display.none)
+bool   showEq           = input.bool(true, "Mark equal highs / lows (EQH / EQL)", group = GD, display = display.none)
+float  eqTol            = input.float(1.5, "Equal levels: within ($)", minval = 0.0, step = 0.1, group = GD, display = display.none)
+bool   useLon           = input.bool(true, "Previous London session high / low", group = GL, display = display.none)
+bool   useNyS           = input.bool(true, "Previous New York session high / low", group = GL, display = display.none)
+bool   useMon           = input.bool(true, "Monday range", group = GL, display = display.none)
+bool   usePM            = input.bool(true, "Previous month high / low", group = GL, display = display.none)
+bool   extraInSweeps    = input.bool(false, "Use session / Monday / month levels in sweeps (changes the signals)", group = GL, display = display.none)
+bool   showRound        = input.bool(true, "Round-number lines", group = GD, display = display.none)
+int    roundLines       = input.int(3, "Round-number lines per side", minval = 1, maxval = 10, group = GD, display = display.none)
+bool   showLbma         = input.bool(true, "LBMA auction lines (10:30 and 15:00 London)", group = GD, display = display.none)
+int    lbmaDays         = input.int(3, "LBMA lines: last days", minval = 1, maxval = 20, group = GD, display = display.none)
 
 // ───── Constants ─────────────────────────────────────────────────────────────────────────
 bool   IS_DARK     = color.r(chart.bg_color) * 0.299 + color.g(chart.bg_color) * 0.587 + color.b(chart.bg_color) * 0.114 < 128
@@ -100,6 +120,7 @@ int    EMA_4H      = 50
 int    EMA_D       = 20
 float  DIFF_GOOD   = 5.0       // stats table: the difference turns green above +5 points
 int    N_GOOD      = 50        //   and with at least 50 trades (spec 4.8)
+int    EX_N        = 8         // reused lines and labels for the display-only session / Monday / month levels
 string TF_TXT      = timeframe.isseconds ? str.tostring(timeframe.multiplier) + "s" : timeframe.isminutes ? str.tostring(timeframe.multiplier) + "m" : timeframe.period
 
 // ───── Types (spec 4.4) ──────────────────────────────────────────────────────────────────
@@ -148,6 +169,23 @@ type Trade
     int    res2 = 0
     int    exit1         // bar_index where each target's trade closed
     int    exit2
+    float  pnl1 = 0.0    // per target: result in $ after cost, once closed
+    float  pnl2 = 0.0
+    // Context tags (stage 7), set at the signal's close; read by the tooltip and the context lab only.
+    string sess = ""     // "asia", "london", "ny_am", "ny_pm"
+    string typ = ""      // "W", "C", "W+C"
+    string kinds = "|"   // swept kinds, e.g. "|P|P1H|PD|"
+    int    nKinds = 0
+    bool   kz = false    // ICT killzone: London 02-05, New York 07-10 (New York time)
+    bool   sb = false    // silver bullet hours: 03, 10, 14 (New York time)
+    bool   lbma = false  // LBMA auction windows: 10:00-11:00 and 14:30-15:30 London
+    bool   smt = false   // silver did not confirm gold's new 20-bar extreme
+    bool   pd = false    // sell above / buy below the middle of the previous day's range
+    int    vol = 0       // 1 = volume > 1.5x its 20-bar mean, -1 = < 1x, 0 = in between
+    float  volR = na
+    bool   rnd = false   // a swept level sits near a round number
+    bool   eq = false    // two distinct swept levels within eqTol
+    int    trend = 0     // 1 with the trend, -1 against, 0 no trend value
 
 // Totals of closed virtual trades for one row of the statistics and results tables.
 // Per target: closed (n) = target (w) + stop (sl) + time stop (ts).
@@ -194,6 +232,24 @@ var int          asiaT    = na
 var int          winFrom  = na                   // the part of statsFrom..statsTo the chart covers
 var int          winTo    = na
 var int          winBars  = 0
+// Stage 7
+var array<Trade> allTr    = array.new<Trade>()   // every trade inside statsFrom..statsTo, for the context lab
+var array<Liq>   extra    = array.new<Liq>()     // display-only session / Monday / month levels
+var array<line>  poolLnEx = array.new<line>()    // their reused lines and labels
+var array<label> poolLbEx = array.new<label>()
+var array<line>  rndLn    = array.new<line>()    // round-number lines
+var array<line>  lbmaLn   = array.new<line>()    // LBMA auction lines, oldest first
+var array<label> lbmaLb   = array.new<label>()
+var float        lonHi    = na                   // London session (02-08 New York), tracked on chart bars
+var float        lonLo    = na
+var int          lonT     = na
+var float        nysHi    = na                   // New York session (08-17 New York)
+var float        nysLo    = na
+var int          nysT     = na
+var float        monHi    = na                   // the week's first trading day (Monday)
+var float        monLo    = na
+var int          monT     = na
+var bool         monOn    = false
 
 // ───── Helpers ───────────────────────────────────────────────────────────────────────────
 // How "big" a kind is: picks the colour of a shared line and the order of names in its label.
@@ -201,10 +257,14 @@ f_rank(string k) =>
     switch k
         "P"    => 1
         "ASIA" => 2
-        "P1H"  => 3
-        "PD"   => 4
-        "P4H"  => 5
-        "PW"   => 6
+        "LON"  => 3
+        "NYS"  => 4
+        "P1H"  => 5
+        "PD"   => 6
+        "MON"  => 7
+        "P4H"  => 8
+        "PW"   => 9
+        "PM"   => 10
         => 0
 
 f_kindColor(string k) =>
@@ -217,6 +277,10 @@ f_kindText(string k, int side) =>
         "P4H" => "4H"
         "PD"  => side == 1 ? "PDH" : "PDL"
         "PW"  => side == 1 ? "PWH" : "PWL"
+        "LON" => side == 1 ? "LON H" : "LON L"
+        "NYS" => side == 1 ? "NY H" : "NY L"
+        "MON" => side == 1 ? "MON H" : "MON L"
+        "PM"  => side == 1 ? "PMH" : "PML"
         => side == 1 ? "ASIA H" : "ASIA L"
 
 f_samePx(float a, float b) =>
@@ -239,7 +303,7 @@ f_groupBorn(array<Liq> grp) =>
 // Names of the kinds in rank order, each once, e.g. "15m + 1H + PDH" (the alert uses "15m+1H+PDH")
 f_kindsText(array<Liq> lvs, string sep = " + ") =>
     string txt = ""
-    for r = 1 to 6
+    for r = 1 to 10
         for x in lvs
             if f_rank(x.kind) == r
                 txt += (txt == "" ? "" : sep) + f_kindText(x.kind, x.side)
@@ -299,6 +363,8 @@ string SZ_STAT  = f_size(statSize)
 string SZ_STATH = f_sizeDown(statSize)
 string SZ_RES   = f_size(resSize)
 string SZ_RESH  = f_sizeDown(resSize)
+string SZ_LAB   = f_size(labSize)
+string SZ_LABH  = f_sizeDown(labSize)
 
 // ───── Context (spec 2.6, 4.6) ───────────────────────────────────────────────────────────
 // Session by the New York hour of the bar's open.
@@ -379,15 +445,22 @@ f_take(array<Liq> arr, array<Liq> out) =>
         out.push(arr.shift())
 
 // ───── Drawing budgets ───────────────────────────────────────────────────────────────────
+// Lines and labels kept back for the pools, the plan, the display-only levels, round numbers and LBMA.
+f_resLines() =>
+    2 * drawNearest + PLAN_LINES + EX_N + (showRound ? 2 * roundLines : 0) + (showLbma ? 2 * lbmaDays : 0)
+
+f_resLabels() =>
+    2 * drawNearest + PLAN_LABELS + EX_N + (showLbma ? 2 * lbmaDays : 0)
+
 f_keepHist(line ln) =>
     histLn.push(ln)
-    while histLn.size() > math.max(MAX_LINES - 2 * drawNearest - PLAN_LINES, 0)
+    while histLn.size() > math.max(MAX_LINES - f_resLines(), 0)
         line.delete(histLn.shift())
 
 // Signal markers come before the ✓ ✗ ⌛ marks: when labels run short, the oldest marks go first,
 // so every recent signal keeps its marker.
 f_trimLabels() =>
-    while sigLb.size() + markLb.size() > math.max(MAX_LABELS - 2 * drawNearest - PLAN_LABELS, 0)
+    while sigLb.size() + markLb.size() > math.max(MAX_LABELS - f_resLabels(), 0)
         if markLb.size() > 0
             label.delete(markLb.shift())
         else
@@ -440,8 +513,21 @@ f_markSwept(array<Liq> lvs) =>
 // get a line. Unused pool lines and labels are hidden.
 f_drawPool(array<Liq> arr, array<line> lns, array<label> lbs) =>
     int n  = arr.size()
+    // Distinct prices, nearest first: neighbours within eqTol are equal highs / lows (stage 7).
+    array<float> gpx = array.new<float>()
+    int k = 0
+    while k < n
+        float p0 = arr.get(k).price
+        gpx.push(p0)
+        int m = k + 1
+        while m < n
+            if not f_samePx(arr.get(m).price, p0)
+                break
+            m += 1
+        k := m
     int g  = 0
     int gP = 0
+    int gi = 0
     int i  = 0
     while i < n and g < lns.size()
         Liq first = arr.get(i)
@@ -457,19 +543,27 @@ f_drawPool(array<Liq> arr, array<line> lns, array<label> lbs) =>
         for x in grp
             if x.kind != "P"
                 onlyP := false
+        bool eq = false
+        if showEq and eqTol > 0
+            if gi > 0
+                eq := math.abs(first.price - gpx.get(gi - 1)) <= eqTol
+            if not eq and gi < gpx.size() - 1
+                eq := math.abs(gpx.get(gi + 1) - first.price) <= eqTol
         if not onlyP or gP < drawChart
             color c = f_groupColor(grp)
             line ln = lns.get(g)
             ln.set_xy1(f_groupBorn(grp), first.price)
             ln.set_xy2(time, first.price)
             ln.set_color(c)
+            ln.set_width(eq ? 2 : 1)
             label lb = lbs.get(g)
             lb.set_xy(bar_index, first.price)
-            lb.set_text(f_groupText(grp))
+            lb.set_text(f_groupText(grp) + (eq ? (first.side == 1 ? "  EQH" : "  EQL") : ""))
             lb.set_textcolor(c)
             g  += 1
             gP += onlyP ? 1 : 0
-        i := j
+        i  := j
+        gi += 1
     while g < lns.size()
         lns.get(g).set_color(na)
         lbs.get(g).set_text("")
@@ -496,6 +590,7 @@ f_drawSignal(Sig s, Trade t) =>
         tt += "\n" + f_sessionEn(s.sess) + " · " + f_tfText(trendTF) + " trend: " + (s.trend == 1 ? "with" : s.trend == -1 ? "against" : "n/a")
         if not na(s.roundHit)
             tt += " · near " + str.tostring(s.roundHit, "#")
+        tt += "\n" + (t.kz ? "Killzone · " : "") + (t.sb ? "Silver Bullet · " : "") + (t.lbma ? "LBMA · " : "") + (t.smt ? "SMT · " : "") + (t.pd ? "PD ✓" : "PD ✗") + " · vol " + (na(t.volR) ? "—" : str.tostring(t.volR, "0.0") + "x") + (t.eq ? " · EQ" : "")
         color col = avoid ? C_MUTED : chart.fg_color
         lb := label.new(bar_index, close, top ? tag + "\n▼" : "▲\n" + tag, yloc = top ? yloc.abovebar : yloc.belowbar, color = na, style = top ? label.style_label_down : label.style_label_up, textcolor = col, size = size.small, tooltip = tt)
         sigLb.push(lb)
@@ -653,6 +748,10 @@ f_spreadLabels() =>
         if lb.get_text() != ""
             lbs.push(lb)
             ys.push(lb.get_y())
+    for lb in poolLbEx
+        if lb.get_text() != ""
+            lbs.push(lb)
+            ys.push(lb.get_y())
     for lb in planLb
         if lb.get_text() != "" and lb.get_x() == bar_index
             lbs.push(lb)
@@ -717,7 +816,7 @@ f_status(Trade t) =>
 
 // One row of the statistics table, columns right to left: grade, count, TP1 win %, coin flip %,
 // difference, $ per trade, TP2 win %, coin flip %, $ per trade (spec 4.8).
-f_statRow(table t, int row, string name, Stat st) =>
+f_statRow(table t, int row, string name, Stat st, string sz) =>
     float w1 = st.n1 > 0 ? 100.0 * st.w1 / st.n1 : na
     float c1 = st.n1 > 0 ? 100.0 * st.c1 / st.n1 : na
     float p1 = st.n1 > 0 ? st.p1 / st.n1 : na
@@ -728,7 +827,7 @@ f_statRow(table t, int row, string name, Stat st) =>
     color dc = na(df) ? C_MUTED : df > DIFF_GOOD and st.n1 >= N_GOOD ? C_GOOD : df < 0 ? C_BAD : C_MUTED
     array<string> cells = array.from(f_sgn(p2, "0.00"), f_pct(c2), f_pct(w2), f_sgn(p1, "0.00"), f_sgn(df, "0.0"), f_pct(c1), f_pct(w1), str.tostring(st.n1), name)
     for k = 0 to 8
-        table.cell(t, k, row, cells.get(k), text_color = k == 4 ? dc : chart.fg_color, text_size = SZ_STAT, text_halign = text.align_right)
+        table.cell(t, k, row, cells.get(k), text_color = k == 4 ? dc : chart.fg_color, text_size = sz, text_halign = text.align_right)
 
 // One row of the results table, columns right to left: grade, then for TP1 and for TP2 the trades
 // that reached the target (✓), hit the stop (✗), closed on the time stop (⌛) and their net total
@@ -780,6 +879,189 @@ bool chartLt1H = timeframe.in_seconds() < 3600     // as in the reference: 1H sw
 bool firedA    = false                              // this bar closed with an A signal (alertcondition)
 bool firedAB   = false                              // ... with an A or B signal
 
+// Stage 7 data, read on every bar. Definitions: research/additions_study.py (add_context).
+// SMT: gold makes a new 20-bar extreme over the last three bars (a candle sweep starts up to two
+// bars back) and silver, on the same bars, does not.
+string silverTicker = silverSym == "" ? syminfo.prefix + ":XAGUSD" : silverSym
+[sHi, sLo] = request.security(silverTicker, timeframe.period, [high, low], ignore_invalid_symbol = true)
+float gHi3     = ta.highest(high, 3)
+float gHiP     = ta.highest(high, 20)[3]
+float gLo3     = ta.lowest(low, 3)
+float gLoP     = ta.lowest(low, 20)[3]
+float sHi3     = ta.highest(sHi, 3)
+float sHiP     = ta.highest(sHi, 20)[3]
+float sLo3     = ta.lowest(sLo, 3)
+float sLoP     = ta.lowest(sLo, 20)[3]
+bool  smtTop   = not na(sHi3) and not na(sHiP) and gHi3 > gHiP and sHi3 <= sHiP
+bool  smtBot   = not na(sLo3) and not na(sLoP) and gLo3 < gLoP and sLo3 >= sLoP
+float pdMid    = (pdHi + pdLo) / 2                  // middle of the previous day's range
+float volAvg   = ta.sma(volume, 20)[1]
+float volRatio = volAvg > 0 ? volume / volAvg : na
+int   nyH      = hour(time, "America/New_York")
+int   lonM     = hour(time, "Europe/London") * 60 + minute(time, "Europe/London")
+int   lonM1    = nz(lonM[1], lonM)
+bool  lbmaNow  = (lonM >= 630 and lonM1 < 630) or (lonM >= 900 and lonM1 < 900)
+bool  inLon    = nyH >= NY_LONDON and nyH < NY_AM   // London session 02-08 New York
+bool  inNyS    = nyH >= NY_AM and nyH < 17          // New York session 08-17 New York
+bool  wasLon   = inLon[1]
+bool  wasNyS   = inNyS[1]
+[pmHi, pmLo, pmT] = request.security(syminfo.tickerid, "M", [high[1], low[1], time[1]], lookahead = barmerge.lookahead_on)
+bool  newMonth = nz(ta.change(time("M"))) != 0
+int   monthEnd = time_close("M")
+
+// ───── Stage 7: tags, context lab, display-only levels ───────────────────────────────────
+// A session / Monday / month level. Into the sweep engine only when extraInSweeps is on (that
+// changes the signals), otherwise display only. Side check against the previous close.
+f_addExtra(Liq lv, float ref) =>
+    bool ok = lv.side == 1 ? lv.price > ref : lv.price < ref
+    if ok and extraInSweeps
+        f_addLevel(lv)
+    if ok and not extraInSweeps
+        extra.push(lv)
+    ok
+
+// Two distinct swept prices within eqTol (as in the reference: prices to the cent).
+f_hasEqual(array<Liq> lvs) =>
+    bool eq = false
+    int  n  = lvs.size()
+    if n > 1
+        for i = 0 to n - 2
+            for j = i + 1 to n - 1
+                float d = math.abs(lvs.get(i).price - lvs.get(j).price)
+                if d > 0.005 and d <= eqTol
+                    eq := true
+    eq
+
+// Context tags of a new signal's trade. Read by the tooltip and the context lab only.
+f_tagTrade(Trade t, Sig s) =>
+    string ks = "|"
+    int    nk = 0
+    for r = 1 to 10
+        for x in s.levels
+            if f_rank(x.kind) == r
+                ks += x.kind + "|"
+                nk += 1
+                break
+    t.sess   := s.sess
+    t.typ    := s.typ
+    t.trend  := s.trend
+    t.rnd    := not na(s.roundHit)
+    t.kinds  := ks
+    t.nKinds := nk
+    t.kz     := (nyH >= 2 and nyH < 5) or (nyH >= 7 and nyH < 10)
+    t.sb     := nyH == 3 or nyH == 10 or nyH == 14
+    t.lbma   := (lonM >= 600 and lonM < 660) or (lonM >= 870 and lonM < 930)
+    t.smt    := s.side == 1 ? smtTop : smtBot
+    t.pd     := not na(pdMid) and (t.dir == -1 ? t.entry > pdMid : t.entry < pdMid)
+    t.volR   := volRatio
+    t.vol    := na(volRatio) ? 0 : volRatio > 1.5 ? 1 : volRatio < 1.0 ? -1 : 0
+    t.eq     := f_hasEqual(s.levels)
+    t
+
+f_kindAt(int k) =>
+    switch k
+        0 => "P"
+        1 => "P1H"
+        2 => "P4H"
+        3 => "PD"
+        4 => "PW"
+        5 => "ASIA"
+        6 => "LON"
+        7 => "NYS"
+        8 => "MON"
+        => "PM"
+
+// Context lab: the rows of each breakdown.
+f_catNames(string dim) =>
+    switch dim
+        "Grade"            => array.from("A", "B", "AVOID")
+        "Session"          => array.from("آسيا", "لندن", "صباح نيويورك", "بعد ظهر نيويورك")
+        "Time window"      => array.from("Killzone", "Silver Bullet", "LBMA", "خارج النوافذ")
+        "Level type"       => array.from(TF_TXT, "1H", "4H", "اليوم السابق", "الأسبوع السابق", "آسيا", "جلسة لندن", "جلسة نيويورك", "الاثنين", "الشهر السابق", "أكثر من نوع")
+        "Sweep type"       => array.from("W", "C", "W+C")
+        "SMT"              => array.from("SMT نعم", "SMT لا")
+        "Premium/Discount" => array.from("مع PD", "عكس PD")
+        "Volume"           => array.from("قفزة فوق 1.5×", "عادي", "منخفض تحت 1×")
+        "Round number"     => array.from("قرب رقم مدوّر", "بعيد")
+        "Equal levels"     => array.from("متساوية", "غير متساوية")
+        => array.from("مع الترند", "عكس الترند", "بلا ترند")
+
+f_labDim(string dim) =>
+    switch dim
+        "Grade"            => "التصنيف"
+        "Session"          => "الجلسة"
+        "Time window"      => "النافذة الزمنية"
+        "Level type"       => "نوع المستوى"
+        "Sweep type"       => "نوع السحب"
+        "SMT"              => "SMT مع الفضة"
+        "Premium/Discount" => "Premium/Discount"
+        "Volume"           => "الحجم"
+        "Round number"     => "الرقم المدوّر"
+        "Equal levels"     => "المستويات المتساوية"
+        => "الترند"
+
+// Is trade t in row k of the breakdown? Time windows and level types can overlap.
+f_inCat(Trade t, string dim, int k) =>
+    switch dim
+        "Grade"            => t.grade == (k == 0 ? "A" : k == 1 ? "B" : "AVOID")
+        "Session"          => t.sess == (k == 0 ? "asia" : k == 1 ? "london" : k == 2 ? "ny_am" : "ny_pm")
+        "Time window"      => k == 0 ? t.kz : k == 1 ? t.sb : k == 2 ? t.lbma : not (t.kz or t.sb or t.lbma)
+        "Level type"       => k == 10 ? t.nKinds > 1 : str.contains(t.kinds, "|" + f_kindAt(k) + "|")
+        "Sweep type"       => t.typ == (k == 0 ? "W" : k == 1 ? "C" : "W+C")
+        "SMT"              => k == 0 ? t.smt : not t.smt
+        "Premium/Discount" => k == 0 ? t.pd : not t.pd
+        "Volume"           => t.vol == (k == 0 ? 1 : k == 1 ? 0 : -1)
+        "Round number"     => k == 0 ? t.rnd : not t.rnd
+        "Equal levels"     => k == 0 ? t.eq : not t.eq
+        => t.trend == (k == 0 ? 1 : k == 1 ? -1 : 0)
+
+// Context lab rows: the same trades and rules as the statistics table, split by labBy. Row "الكل"
+// equals that table's; with "Grade" every row does. Returns the number of category rows.
+f_labFill(table tb) =>
+    array<string> names = f_catNames(labBy)
+    int nc = names.size()
+    array<Stat> sts = array.new<Stat>()
+    for k = 0 to nc
+        sts.push(Stat.new())
+    for t in allTr
+        for k = 0 to nc
+            if k == 0 or f_inCat(t, labBy, k - 1)
+                Stat st = sts.get(k)
+                if t.res1 != 0
+                    f_addLeg(st, 1, t.res1, t.coin1, t.pnl1)
+                if t.res2 != 0
+                    f_addLeg(st, 2, t.res2, t.coin2, t.pnl2)
+    for k = 0 to nc
+        f_statRow(tb, 2 + k, k == 0 ? "الكل" : names.get(k - 1), sts.get(k), SZ_LAB)
+    nc
+
+// Display-only levels still live: dashed, from their bar to the current bar, with their label.
+f_drawExtra(array<Liq> arr) =>
+    int g = 0
+    for x in arr
+        if g < poolLnEx.size()
+            line ln = poolLnEx.get(g)
+            ln.set_xy1(x.born, x.price)
+            ln.set_xy2(time, x.price)
+            ln.set_color(C_CAL)
+            ln.set_style(line.style_dashed)
+            label lb = poolLbEx.get(g)
+            lb.set_xy(bar_index, x.price)
+            lb.set_text(f_kindText(x.kind, x.side) + "  " + str.tostring(x.price, "#.0"))
+            lb.set_textcolor(C_CAL)
+            g += 1
+    while g < poolLnEx.size()
+        poolLnEx.get(g).set_color(na)
+        poolLbEx.get(g).set_text("")
+        g += 1
+
+// A round-number line; multiples of twice the step are drawn stronger.
+f_roundLine(line ln, float y) =>
+    bool big = math.abs(y / (2 * roundStep) - math.round(y / (2 * roundStep))) < 0.000001
+    ln.set_xy1(bar_index - 1, y)
+    ln.set_xy2(bar_index, y)
+    ln.set_color(color.new(chart.fg_color, big ? 70 : 85))
+
 // ───── Engine: one pass per confirmed bar, in the reference's order (spec 4.4) ───────────
 if barstate.isconfirmed
     // 1. Levels available at this bar's open. Side check against the previous close.
@@ -815,6 +1097,26 @@ if barstate.isconfirmed
         if asiaLo < close[1]
             f_addLevel(Liq.new(asiaLo, -1, "ASIA", asiaT, dayEnd))
             calAdded := true
+    // Stage 7: previous London / New York session, Monday range, previous month. Display only unless
+    // extraInSweeps, which makes them sweep levels like the ones above.
+    if useLon and wasLon and not inLon and not na(lonHi)
+        f_addExtra(Liq.new(lonHi, 1, "LON", lonT, dayEnd), close[1])
+        f_addExtra(Liq.new(lonLo, -1, "LON", lonT, dayEnd), close[1])
+        calAdded := calAdded or extraInSweeps
+    if useNyS and wasNyS and not inNyS and not na(nysHi)
+        f_addExtra(Liq.new(nysHi, 1, "NYS", nysT, dayEnd), close[1])
+        f_addExtra(Liq.new(nysLo, -1, "NYS", nysT, dayEnd), close[1])
+        calAdded := calAdded or extraInSweeps
+    if monOn and newDay and not newWeek
+        if useMon and not na(monHi)
+            f_addExtra(Liq.new(monHi, 1, "MON", monT, weekEnd), close[1])
+            f_addExtra(Liq.new(monLo, -1, "MON", monT, weekEnd), close[1])
+            calAdded := calAdded or extraInSweeps
+        monOn := false
+    if usePM and newMonth and not na(pmHi)
+        f_addExtra(Liq.new(pmHi, 1, "PM", pmT, monthEnd), close[1])
+        f_addExtra(Liq.new(pmLo, -1, "PM", pmT, monthEnd), close[1])
+        calAdded := calAdded or extraInSweeps
     if calAdded
         nextExp := f_minExpiry()
 
@@ -868,9 +1170,12 @@ if barstate.isconfirmed
         float T1 = targetMode == "$" ? tp1 : tp1Atr * atrNow[1]
         float T2 = targetMode == "$" ? tp2 : tp2Atr * atrNow[1]
         Trade t  = Trade.new(d, s.grade, bar_index, close, close - d * S, close + d * T1, close + d * T2, S / (S + T1), S / (S + T2), time >= statsFrom and time < statsTo)
+        f_tagTrade(t, s)
         t.lb    := f_drawSignal(s, t)
         lastSig := (s.side == 1 ? "بيع" : "شراء") + " · " + s.typ + " · " + s.grade
         openTr.push(t)
+        if t.inStats
+            allTr.push(t)
         lastT := t
         if showAvoid or s.grade != "AVOID"
             planT := t
@@ -890,18 +1195,20 @@ if barstate.isconfirmed
                     if r1 != 0
                         tr.res1  := r1
                         tr.exit1 := bar_index
+                        tr.pnl1  := tr.dir * (px1 - tr.entry) - cost
                         if tr.inStats
-                            f_addLeg(stAll, 1, r1, tr.coin1, tr.dir * (px1 - tr.entry) - cost)
-                            f_addLeg(f_statOf(tr.grade), 1, r1, tr.coin1, tr.dir * (px1 - tr.entry) - cost)
+                            f_addLeg(stAll, 1, r1, tr.coin1, tr.pnl1)
+                            f_addLeg(f_statOf(tr.grade), 1, r1, tr.coin1, tr.pnl1)
                         f_drawMark(tr)
                 if tr.res2 == 0
                     [r2, px2] = f_legStep(tr.dir, tr.sl, tr.tp2, barsIn)
                     if r2 != 0
                         tr.res2  := r2
                         tr.exit2 := bar_index
+                        tr.pnl2  := tr.dir * (px2 - tr.entry) - cost
                         if tr.inStats
-                            f_addLeg(stAll, 2, r2, tr.coin2, tr.dir * (px2 - tr.entry) - cost)
-                            f_addLeg(f_statOf(tr.grade), 2, r2, tr.coin2, tr.dir * (px2 - tr.entry) - cost)
+                            f_addLeg(stAll, 2, r2, tr.coin2, tr.pnl2)
+                            f_addLeg(f_statOf(tr.grade), 2, r2, tr.coin2, tr.pnl2)
                 if tr.res1 != 0 and tr.res2 != 0
                     openTr.remove(i)
 
@@ -917,12 +1224,53 @@ if barstate.isconfirmed
         asiaLo := wasAsia ? math.min(asiaLo, low) : low
         asiaT  := wasAsia ? asiaT : time
 
+    // Stage 7: display-only levels end when they expire, or when price trades beyond them (dotted when
+    // the bar closed back inside, faded when it did not). They never make a signal.
+    if extra.size() > 0
+        for i = extra.size() - 1 to 0
+            Liq x = extra.get(i)
+            bool expired = not na(x.expiry) and x.expiry <= time
+            bool taken   = x.side == 1 ? high > x.price : low < x.price
+            if expired or taken
+                array<Liq> one = array.new<Liq>()
+                one.push(x)
+                f_drawEnded(one, expired ? time[1] : time, expired ? 0 : (x.side == 1 ? close < x.price : close > x.price) ? 2 : 1)
+                extra.remove(i)
+
+    // London and New York sessions and the week's first trading day, on chart bars.
+    if inLon
+        lonHi := wasLon ? math.max(lonHi, high) : high
+        lonLo := wasLon ? math.min(lonLo, low) : low
+        lonT  := wasLon ? lonT : time
+    if inNyS
+        nysHi := wasNyS ? math.max(nysHi, high) : high
+        nysLo := wasNyS ? math.min(nysLo, low) : low
+        nysT  := wasNyS ? nysT : time
+    if newWeek
+        monOn := true
+        monHi := high
+        monLo := low
+        monT  := time
+    else if monOn
+        monHi := math.max(monHi, high)
+        monLo := math.min(monLo, low)
+
     // 7. Chart-TF swings confirmed at this close. Side check against this close.
     if useP
         if not na(pivHi) and pivHi > close
             f_addLevel(Liq.new(pivHi, 1, "P", time[swingLen], na))
         if not na(pivLo) and pivLo < close
             f_addLevel(Liq.new(pivLo, -1, "P", time[swingLen], na))
+
+// Stage 7: LBMA gold auctions (10:30 and 15:00 London), a faint vertical line on the bar that starts
+// them, for the last lbmaDays days.
+if barstate.isconfirmed and showLbma and lbmaNow
+    lbmaLn.push(line.new(bar_index, close, bar_index, close + syminfo.mintick, extend = extend.both, color = color.new(chart.fg_color, 82), style = line.style_dotted))
+    lbmaLb.push(label.new(bar_index, high, "LBMA " + (lonM >= 900 ? "15:00" : "10:30"), yloc = yloc.abovebar, style = label.style_none, textcolor = color.new(chart.fg_color, 55), size = size.tiny))
+    while lbmaLn.size() > 2 * lbmaDays
+        line.delete(lbmaLn.shift())
+    while lbmaLb.size() > 2 * lbmaDays
+        label.delete(lbmaLb.shift())
 
 // Fixed alert conditions (spec 4.10), for alerts set with "Once Per Bar Close".
 alertcondition(firedA, "GLM: any A sweep", "GLM: A sweep on {{ticker}} {{interval}}, close {{close}}")
@@ -931,6 +1279,7 @@ alertcondition(firedAB, "GLM: any A or B sweep", "GLM: A or B sweep on {{ticker}
 // ───── Display: reads the engine's state, never changes it ───────────────────────────────
 var table dash  = showDash ? table.new(f_pos(dashPos), 3, 9, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
 var table stTbl = showStats ? table.new(f_pos(statPos), 9, 7, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
+var table labTbl = showLab ? table.new(f_pos(labPos), 9, 16, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
 var table rsTbl = showResults ? table.new(f_pos(resPos), 9, 8, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
 
 if barstate.isfirst
@@ -940,6 +1289,16 @@ if barstate.isfirst
             poolLnDn.push(line.new(time, close, time, close, xloc = xloc.bar_time, color = na, width = 1))
             poolLbUp.push(label.new(bar_index, close, "", color = na, style = label.style_label_left, textcolor = na, size = size.small))
             poolLbDn.push(label.new(bar_index, close, "", color = na, style = label.style_label_left, textcolor = na, size = size.small))
+    for k = 1 to EX_N
+        poolLnEx.push(line.new(time, close, time, close, xloc = xloc.bar_time, color = na, width = 1))
+        poolLbEx.push(label.new(bar_index, close, "", color = na, style = label.style_label_left, textcolor = na, size = size.small))
+    if showRound
+        for k = 1 to 2 * roundLines
+            rndLn.push(line.new(bar_index, close, bar_index, close, extend = extend.both, color = na, style = line.style_dashed))
+    if not na(labTbl)
+        int ncl = f_catNames(labBy).size()
+        table.merge_cells(labTbl, 0, 0, 8, 0)          // title
+        table.merge_cells(labTbl, 0, ncl + 3, 8, ncl + 3)  // footer
     if showPlan
         for k = 1 to PLAN_LINES
             planLn.push(line.new(bar_index, close, bar_index, close, color = na, width = 1))
@@ -964,8 +1323,14 @@ if barstate.isfirst
 if barstate.islast
     f_drawPool(showLevels ? above : array.new<Liq>(), poolLnUp, poolLbUp)
     f_drawPool(showLevels ? below : array.new<Liq>(), poolLnDn, poolLbDn)
+    f_drawExtra(showLevels ? extra : array.new<Liq>())
     f_drawPlan(planT)
     f_spreadLabels()
+    if showRound and rndLn.size() > 0
+        float b0 = math.floor(close / roundStep) * roundStep
+        for k = 0 to roundLines - 1
+            f_roundLine(rndLn.get(2 * k), b0 - k * roundStep)
+            f_roundLine(rndLn.get(2 * k + 1), b0 + (k + 1) * roundStep)
     if not na(dash)
         table.cell(dash, 0, 0, "GLM · لوحة القراءة", text_color = chart.fg_color, text_size = SZ_DASH, text_halign = text.align_right)
         f_dashTrend(dash, 1, "ترند الساعة", ema1H)
@@ -978,15 +1343,22 @@ if barstate.islast
         f_dashRow(dash, 8, "آخر إشارة", lastSig + f_status(lastT))
     string t1Txt = targetMode == "$" ? str.tostring(tp1, "#.##") + "$" : str.tostring(tp1Atr, "#.##") + "×ATR"
     string t2Txt = targetMode == "$" ? str.tostring(tp2, "#.##") + "$" : str.tostring(tp2Atr, "#.##") + "×ATR"
+    array<string> head = array.from("$/صفقة", "الصدفة", "ربح " + t2Txt, "$/صفقة", "الفرق", "الصدفة", "ربح " + t1Txt, "العدد", "التصنيف")
+    if not na(labTbl)
+        table.cell(labTbl, 0, 0, "مختبر السياق · " + f_labDim(labBy), text_color = chart.fg_color, text_size = SZ_LAB, text_halign = text.align_right)
+        for k = 0 to 8
+            table.cell(labTbl, k, 1, k == 8 ? f_labDim(labBy) : head.get(k), text_color = C_MUTED, text_size = SZ_LABH, text_halign = text.align_right)
+        int nc = f_labFill(labTbl)
+        string note = (labBy == "Time window" or labBy == "Level type" ? "الصفوف غير متنافية · " : "") + "يقيس فقط ولا يغيّر الإشارات · " + f_date(winFrom) + " → " + f_date(winTo)
+        table.cell(labTbl, 0, nc + 3, note, text_color = C_MUTED, text_size = SZ_LABH, text_halign = text.align_right)
     if not na(stTbl)
-        array<string> head = array.from("$/صفقة", "الصدفة", "ربح " + t2Txt, "$/صفقة", "الفرق", "الصدفة", "ربح " + t1Txt, "العدد", "التصنيف")
         table.cell(stTbl, 0, 0, "جدول الإحصاءات الحي", text_color = chart.fg_color, text_size = SZ_STAT, text_halign = text.align_right)
         for k = 0 to 8
             table.cell(stTbl, k, 1, head.get(k), text_color = C_MUTED, text_size = SZ_STATH, text_halign = text.align_right)
-        f_statRow(stTbl, 2, "الكل", stAll)
-        f_statRow(stTbl, 3, "A", stA)
-        f_statRow(stTbl, 4, "B", stB)
-        f_statRow(stTbl, 5, "AVOID", stAvoid)
+        f_statRow(stTbl, 2, "الكل", stAll, SZ_STAT)
+        f_statRow(stTbl, 3, "A", stA, SZ_STAT)
+        f_statRow(stTbl, 4, "B", stB, SZ_STAT)
+        f_statRow(stTbl, 5, "AVOID", stAvoid, SZ_STAT)
         table.cell(stTbl, 0, 6, "الصدفة = نسبة رمي العملة · الفرق ≤ 0 يعني لا ميزة", text_color = C_MUTED, text_size = SZ_STATH, text_halign = text.align_left)
         table.cell(stTbl, 5, 6, f_date(winFrom) + " → " + f_date(winTo) + " · " + str.tostring(winBars) + " شمعة", text_color = C_MUTED, text_size = SZ_STATH, text_halign = text.align_right)
     if not na(rsTbl)
