@@ -2,9 +2,9 @@
 indicator("Gold Liquidity Map", shorttitle = "GLM", overlay = true, max_lines_count = 500, max_labels_count = 500)
 
 // ═════════════════════════════════════════════════════════════════════════════════════════
-// Gold Liquidity Map (GLM) - XAUUSD 15m.  Stage 4 of 6: levels, sweeps, grade, reading panel,
-// virtual trades and the live statistics table.
-// Spec:  GOLD_LIQUIDITY_INDICATOR_SPEC.md  (2.1-2.7, 4.3-4.9, 4.11)
+// Gold Liquidity Map (GLM) - XAUUSD 15m.  Stage 5 of 6: levels, sweeps, grade, reading panel,
+// virtual trades, the live statistics table and alerts.
+// Spec:  GOLD_LIQUIDITY_INDICATOR_SPEC.md  (2.1-2.7, 4.3-4.11)
 // Logic: research/sweep_engine.py is the reference; when in doubt, the code there decides.
 // No repaint: the engine runs on confirmed bars only, every higher-timeframe value comes from
 // an HTF bar that has already closed, and a signal is drawn on the bar whose close completes it.
@@ -18,45 +18,47 @@ string GP = "Plan"
 string GC = "Context"
 string GT = "Stats"
 string GD = "Display"
+string GA = "Alerts"
 
 int    swingLen         = input.int(5, "Swing length, chart TF", minval = 1, group = GL)
 int    htfLen           = input.int(3, "Swing length, 1H and 4H", minval = 1, group = GL)
-bool   useP             = input.bool(true, "Chart-TF swings", group = GL)
-bool   useP1H           = input.bool(true, "1H swings", group = GL)
-bool   useP4H           = input.bool(true, "4H swings", group = GL)
-bool   usePD            = input.bool(true, "Previous day high / low", group = GL)
-bool   usePW            = input.bool(true, "Previous week high / low", group = GL)
-bool   useAsia          = input.bool(true, "Asia range", group = GL)
-string asiaSess         = input.session("0000-0600", "Asia session (UTC)", group = GL)
-int    maxLevelsPerSide = input.int(200, "Max stored levels per side", minval = 1, group = GL)
-int    drawNearest      = input.int(12, "Levels drawn per side (nearest)", minval = 0, maxval = 100, group = GL)
-int    candleBars       = input.int(2, "Candle-sweep window (bars)", minval = 1, group = GS)
-float  minPen           = input.float(0.0, "Min penetration to take a level ($)", minval = 0.0, step = 0.1, group = GS)
-bool   useW             = input.bool(true, "Wick sweeps (W)", group = GS)
-bool   useC             = input.bool(true, "Candle sweeps (C)", group = GS)
+bool   useP             = input.bool(true, "Chart-TF swings", group = GL, display = display.none)
+bool   useP1H           = input.bool(true, "1H swings", group = GL, display = display.none)
+bool   useP4H           = input.bool(true, "4H swings", group = GL, display = display.none)
+bool   usePD            = input.bool(true, "Previous day high / low", group = GL, display = display.none)
+bool   usePW            = input.bool(true, "Previous week high / low", group = GL, display = display.none)
+bool   useAsia          = input.bool(true, "Asia range", group = GL, display = display.none)
+string asiaSess         = input.session("0000-0600", "Asia session (UTC)", group = GL, display = display.none)
+int    maxLevelsPerSide = input.int(200, "Max stored levels per side", minval = 1, group = GL, display = display.none)
+int    drawNearest      = input.int(12, "Levels drawn per side (nearest)", minval = 0, maxval = 100, group = GL, display = display.none)
+int    candleBars       = input.int(2, "Candle-sweep window (bars)", minval = 1, group = GS, display = display.none)
+float  minPen           = input.float(0.0, "Min penetration to take a level ($)", minval = 0.0, step = 0.1, group = GS, display = display.none)
+bool   useW             = input.bool(true, "Wick sweeps (W)", group = GS, display = display.none)
+bool   useC             = input.bool(true, "Candle sweeps (C)", group = GS, display = display.none)
 float  stopBuf          = input.float(1.0, "Stop beyond the sweep extreme ($)", minval = 0.0, step = 0.1, group = GP)
-string targetMode       = input.string("$", "Target unit", options = ["$", "ATR"], group = GP)
+string targetMode       = input.string("$", "Target unit", options = ["$", "ATR"], group = GP, display = display.none)
 float  tp1              = input.float(15.0, "TP1 ($)", minval = 0.01, group = GP)
 float  tp2              = input.float(20.0, "TP2 ($)", minval = 0.01, group = GP)
-float  tp1Atr           = input.float(2.0, "TP1 (x ATR)", minval = 0.01, step = 0.1, group = GP)
-float  tp2Atr           = input.float(2.7, "TP2 (x ATR)", minval = 0.01, step = 0.1, group = GP)
-int    timeStop         = input.int(32, "Time stop (bars)", minval = 1, group = GP)
-float  cost             = input.float(0.5, "Cost per trade in the stats ($)", minval = 0.0, step = 0.1, group = GP)
-string trendTF          = input.timeframe("60", "Trend timeframe", group = GC)
-int    trendLen         = input.int(50, "Trend EMA length", minval = 1, group = GC)
-float  roundStep        = input.float(50.0, "Round number step ($)", minval = 0.01, group = GC)
-float  roundTol         = input.float(3.0, "Round number tolerance ($)", minval = 0.0, group = GC)
-bool   avoidAsia        = input.bool(true, "AVOID: Asia session", group = GC)
-bool   avoidRound       = input.bool(true, "AVOID: near a round number", group = GC)
-bool   avoidCounter     = input.bool(true, "AVOID: against the trend", group = GC)
-int    statsFrom        = input.time(timestamp("UTC", 2000, 1, 1, 0, 0), "Stats from", group = GT)
-int    statsTo          = input.time(timestamp("UTC", 2100, 1, 1, 0, 0), "Stats to", group = GT)
-bool   showLevels       = input.bool(true, "Show levels", group = GD)
-bool   showSignals      = input.bool(true, "Show signals", group = GD)
-bool   showPlan         = input.bool(true, "Show trade plan (latest signal)", group = GD)
-bool   showStats        = input.bool(true, "Show statistics table", group = GD)
-bool   showDash         = input.bool(true, "Show reading panel", group = GD)
-bool   showAvoid        = input.bool(true, "Show AVOID signals (grey)", group = GD)
+float  tp1Atr           = input.float(2.0, "TP1 (x ATR)", minval = 0.01, step = 0.1, group = GP, display = display.none)
+float  tp2Atr           = input.float(2.7, "TP2 (x ATR)", minval = 0.01, step = 0.1, group = GP, display = display.none)
+int    timeStop         = input.int(32, "Time stop (bars)", minval = 1, group = GP, display = display.none)
+float  cost             = input.float(0.5, "Cost per trade in the stats ($)", minval = 0.0, step = 0.1, group = GP, display = display.none)
+string trendTF          = input.timeframe("60", "Trend timeframe", group = GC, display = display.none)
+int    trendLen         = input.int(50, "Trend EMA length", minval = 1, group = GC, display = display.none)
+float  roundStep        = input.float(50.0, "Round number step ($)", minval = 0.01, group = GC, display = display.none)
+float  roundTol         = input.float(3.0, "Round number tolerance ($)", minval = 0.0, group = GC, display = display.none)
+bool   avoidAsia        = input.bool(true, "AVOID: Asia session", group = GC, display = display.none)
+bool   avoidRound       = input.bool(true, "AVOID: near a round number", group = GC, display = display.none)
+bool   avoidCounter     = input.bool(true, "AVOID: against the trend", group = GC, display = display.none)
+int    statsFrom        = input.time(timestamp("UTC", 2000, 1, 1, 0, 0), "Stats from", group = GT, display = display.none)
+int    statsTo          = input.time(timestamp("UTC", 2100, 1, 1, 0, 0), "Stats to", group = GT, display = display.none)
+bool   showLevels       = input.bool(true, "Show levels", group = GD, display = display.none)
+bool   showSignals      = input.bool(true, "Show signals", group = GD, display = display.none)
+bool   showPlan         = input.bool(true, "Show trade plan (latest signal)", group = GD, display = display.none)
+bool   showStats        = input.bool(true, "Show statistics table", group = GD, display = display.none)
+bool   showDash         = input.bool(true, "Show reading panel", group = GD, display = display.none)
+bool   showAvoid        = input.bool(true, "Show AVOID signals (grey)", group = GD, display = display.none)
+string alertMin         = input.string("A", "Alert from grade", options = ["A", "B", "ALL"], group = GA, display = display.none)
 
 // ───── Constants ─────────────────────────────────────────────────────────────────────────
 bool   IS_DARK     = color.r(chart.bg_color) * 0.299 + color.g(chart.bg_color) * 0.587 + color.b(chart.bg_color) * 0.114 < 128
@@ -215,13 +217,13 @@ f_groupBorn(array<Liq> grp) =>
         b := math.min(b, x.born)
     b
 
-// Names of the kinds in rank order, each once, e.g. "15m + 1H + PDH"
-f_kindsText(array<Liq> lvs) =>
+// Names of the kinds in rank order, each once, e.g. "15m + 1H + PDH" (the alert uses "15m+1H+PDH")
+f_kindsText(array<Liq> lvs, string sep = " + ") =>
     string txt = ""
     for r = 1 to 6
         for x in lvs
             if f_rank(x.kind) == r
-                txt += (txt == "" ? "" : " + ") + f_kindText(x.kind, x.side)
+                txt += (txt == "" ? "" : sep) + f_kindText(x.kind, x.side)
                 break
     txt
 
@@ -525,6 +527,21 @@ f_addLeg(Stat st, int leg, int res, float coin, float pnl) =>
         st.c2 := st.c2 + coin
         st.p2 := st.p2 + pnl
 
+// ───── Alerts (spec 4.10) ────────────────────────────────────────────────────────────────
+// alertMin "A" = A only, "B" = A and B, "ALL" = every grade.
+f_alertOk(string g) =>
+    alertMin == "ALL" or g == "A" or (alertMin == "B" and g == "B")
+
+// XAUUSD 15m | SELL | A | swept 1H+PDH @ 4123.40 | entry 4120.10 | SL 4126.00 ($5.90) | TP1 4105.10 | TP2 4100.10 | coin-flip 28%/23%
+f_alertText(Sig s, Trade t) =>
+    string m = syminfo.ticker + " " + TF_TXT + " | " + (t.dir == 1 ? "BUY" : "SELL") + " | " + s.grade
+    m += " | swept " + f_kindsText(s.levels, "+") + " @ " + str.tostring(s.ref, "#.00")
+    m += " | entry " + str.tostring(t.entry, "#.00")
+    m += " | SL " + str.tostring(t.sl, "#.00") + " ($" + str.tostring(math.abs(t.entry - t.sl), "0.00") + ")"
+    m += " | TP1 " + str.tostring(t.tp1, "#.00") + " | TP2 " + str.tostring(t.tp2, "#.00")
+    m += " | coin-flip " + str.tostring(100 * t.coin1, "0") + "%/" + str.tostring(100 * t.coin2, "0") + "%"
+    m
+
 // ───── Plan, panel and table ─────────────────────────────────────────────────────────────
 f_planItem(line ln, label lb, int x1, int x2, float y, color c, int w, string txt) =>
     ln.set_xy1(x1, y)
@@ -634,6 +651,8 @@ int  weekEnd   = time_close("W")
 bool inAsia    = not na(time(timeframe.period, asiaSess, "UTC"))
 bool wasAsia   = inAsia[1]
 bool chartLt1H = timeframe.in_seconds() < 3600     // as in the reference: 1H swings only below 1H
+bool firedA    = false                              // this bar closed with an A signal (alertcondition)
+bool firedAB   = false                              // ... with an A or B signal
 
 // ───── Engine: one pass per confirmed bar, in the reference's order (spec 4.4) ───────────
 if barstate.isconfirmed
@@ -713,7 +732,8 @@ if barstate.isconfirmed
 
     // 5. One signal per bar, at this close. A bar that sweeps both sides is ambiguous: no signal,
     //    though its levels are still used up. Grade it, draw it, open its virtual trade (spec 2.4):
-    //    entry at this close, stop stopBuf beyond the sweep extreme, two targets. (Stage 5: alert.)
+    //    entry at this close, stop stopBuf beyond the sweep extreme, two targets. Then the alert:
+    //    once, at this close (spec 4.10).
     if na(sigUp) != na(sigDn)
         Sig s = na(sigUp) ? sigDn : sigUp
         f_grade(s, emaTrend)
@@ -728,6 +748,10 @@ if barstate.isconfirmed
         lastT := t
         if showAvoid or s.grade != "AVOID"
             planT := t
+        firedA  := s.grade == "A"
+        firedAB := s.grade == "A" or s.grade == "B"
+        if f_alertOk(s.grade)
+            alert(f_alertText(s, t), alert.freq_once_per_bar_close)
 
     // 6. Virtual trades opened on earlier bars: one more bar for each target still open.
     if openTr.size() > 0
@@ -773,6 +797,10 @@ if barstate.isconfirmed
             f_addLevel(Liq.new(pivHi, 1, "P", time[swingLen], na))
         if not na(pivLo) and pivLo < close
             f_addLevel(Liq.new(pivLo, -1, "P", time[swingLen], na))
+
+// Fixed alert conditions (spec 4.10), for alerts set with "Once Per Bar Close".
+alertcondition(firedA, "GLM: any A sweep", "GLM: A sweep on {{ticker}} {{interval}}, close {{close}}")
+alertcondition(firedAB, "GLM: any A or B sweep", "GLM: A or B sweep on {{ticker}} {{interval}}, close {{close}}")
 
 // ───── Display: reads the engine's state, never changes it ───────────────────────────────
 var table dash  = showDash ? table.new(position.top_right, 3, 9, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
