@@ -19,6 +19,7 @@ string GC = "Context"
 string GT = "Stats"
 string GD = "Display"
 string GA = "Alerts"
+string GB = "Tables"
 
 int    swingLen         = input.int(5, "Swing length, chart TF", minval = 1, group = GL)
 int    htfLen           = input.int(3, "Swing length, 1H and 4H", minval = 1, group = GL)
@@ -62,6 +63,13 @@ bool   showAvoid        = input.bool(true, "Show AVOID signals (grey)", group = 
 string alertMin         = input.string("A", "Alert from grade", options = ["A", "B", "ALL"], group = GA, display = display.none)
 // Declared last so the saved values of the inputs above keep their place on the chart.
 float  minStop          = input.float(0.0, "Minimum stop ($), 0 = off", minval = 0.0, step = 0.5, group = GP, display = display.none)
+string dashPos          = input.string("Top right", "Reading panel", options = ["Top left", "Top center", "Top right", "Middle left", "Middle center", "Middle right", "Bottom left", "Bottom center", "Bottom right"], group = GB, inline = "dash", display = display.none)
+string dashSize         = input.string("Small", "", options = ["Tiny", "Small", "Normal", "Large"], group = GB, inline = "dash", display = display.none)
+string statPos          = input.string("Bottom right", "Statistics table", options = ["Top left", "Top center", "Top right", "Middle left", "Middle center", "Middle right", "Bottom left", "Bottom center", "Bottom right"], group = GB, inline = "stat", display = display.none)
+string statSize         = input.string("Small", "", options = ["Tiny", "Small", "Normal", "Large"], group = GB, inline = "stat", display = display.none)
+string resPos           = input.string("Middle right", "Results table", options = ["Top left", "Top center", "Top right", "Middle left", "Middle center", "Middle right", "Bottom left", "Bottom center", "Bottom right"], group = GB, inline = "res", display = display.none)
+string resSize          = input.string("Small", "", options = ["Tiny", "Small", "Normal", "Large"], group = GB, inline = "res", display = display.none)
+float  labelGap         = input.float(2.0, "Min spacing of the labels on the right ($), 0 = off", minval = 0.0, step = 0.5, group = GD, display = display.none)
 
 // ───── Constants ─────────────────────────────────────────────────────────────────────────
 bool   IS_DARK     = color.r(chart.bg_color) * 0.299 + color.g(chart.bg_color) * 0.587 + color.b(chart.bg_color) * 0.114 < 128
@@ -252,6 +260,42 @@ f_sgn(float x, string fmt) =>
 
 f_date(int t) =>
     na(t) ? "—" : str.format_time(t, "yyyy-MM-dd", "UTC")
+
+// Net total in $ after costs, e.g. "+104.0$"; "—" while no trade has closed.
+f_usd(float p, int n) =>
+    n == 0 ? "—" : (p >= 0 ? "+" : "") + str.tostring(p, "0.0") + "$"
+
+// Table position and text size from the inputs. Headers and footers are one size smaller.
+f_pos(string p) =>
+    switch p
+        "Top left"      => position.top_left
+        "Top center"    => position.top_center
+        "Top right"     => position.top_right
+        "Middle left"   => position.middle_left
+        "Middle center" => position.middle_center
+        "Middle right"  => position.middle_right
+        "Bottom left"   => position.bottom_left
+        "Bottom center" => position.bottom_center
+        => position.bottom_right
+
+f_size(string s) =>
+    switch s
+        "Tiny"   => size.tiny
+        "Small"  => size.small
+        "Normal" => size.normal
+        => size.large
+
+f_sizeDown(string s) =>
+    switch s
+        "Large"  => size.normal
+        "Normal" => size.small
+        => size.tiny
+
+string SZ_DASH  = f_size(dashSize)
+string SZ_STAT  = f_size(statSize)
+string SZ_STATH = f_sizeDown(statSize)
+string SZ_RES   = f_size(resSize)
+string SZ_RESH  = f_sizeDown(resSize)
 
 // ───── Context (spec 2.6, 4.6) ───────────────────────────────────────────────────────────
 // Session by the New York hour of the bar's open.
@@ -583,6 +627,52 @@ f_drawPlan(Trade t) =>
             box.set_rightbottom(planBx.get(1), xEnd, math.min(t.entry, t.tp2))
             box.set_bgcolor(planBx.get(1), color.new(C_GOOD, 88))
 
+// Labels on the right of the last bar: the nearest levels and, while the plan is open, its labels.
+// Where they would overlap they are pushed apart vertically to at least labelGap, each cluster
+// centred on its own prices. Display only: the lines stay put and each text keeps its exact price.
+f_spreadLabels() =>
+    array<label> lbs = array.new<label>()
+    array<float> ys  = array.new<float>()
+    for lb in poolLbUp
+        if lb.get_text() != ""
+            lbs.push(lb)
+            ys.push(lb.get_y())
+    for lb in poolLbDn
+        if lb.get_text() != ""
+            lbs.push(lb)
+            ys.push(lb.get_y())
+    for lb in planLb
+        if lb.get_text() != "" and lb.get_x() == bar_index
+            lbs.push(lb)
+            ys.push(lb.get_y())
+    int n = lbs.size()
+    if labelGap > 0 and n > 1
+        array<int>   ord = ys.sort_indices(order.descending)
+        array<int>   cs  = array.new<int>()      // each cluster's first label, in price order
+        array<int>   cn  = array.new<int>()      // labels in each cluster
+        array<float> ct  = array.new<float>()    // y of each cluster's top label
+        for i = 0 to n - 1
+            cs.push(i)
+            cn.push(1)
+            ct.push(ys.get(ord.get(i)))
+            while cs.size() > 1
+                int   m      = cs.size() - 1
+                float bottom = ct.get(m - 1) - (cn.get(m - 1) - 1) * labelGap
+                if bottom - ct.get(m) >= labelGap
+                    break
+                int k = cn.get(m - 1) + cn.get(m)
+                cs.pop()
+                cn.pop()
+                ct.pop()
+                cn.set(m - 1, k)
+                float sum = 0.0
+                for j = cs.get(m - 1) to cs.get(m - 1) + k - 1
+                    sum += ys.get(ord.get(j))
+                ct.set(m - 1, sum / k + (k - 1) * labelGap / 2)
+        for c = 0 to cs.size() - 1
+            for j = 0 to cn.get(c) - 1
+                lbs.get(ord.get(cs.get(c) + j)).set_y(ct.get(c) - j * labelGap)
+
 // Nearest active level on one side: "4201.9 · 15m · 13.1$"
 f_nearestText(array<Liq> arr) =>
     string out = "—"
@@ -598,16 +688,16 @@ f_nearestText(array<Liq> arr) =>
 
 // Reading panel rows: name on the right; the value spans the two left columns.
 f_dashRow(table t, int row, string name, string val) =>
-    table.cell(t, 2, row, name, text_color = C_MUTED, text_size = size.small, text_halign = text.align_right)
-    table.cell(t, 0, row, val, text_color = chart.fg_color, text_size = size.small, text_halign = text.align_left)
+    table.cell(t, 2, row, name, text_color = C_MUTED, text_size = SZ_DASH, text_halign = text.align_right)
+    table.cell(t, 0, row, val, text_color = chart.fg_color, text_size = SZ_DASH, text_halign = text.align_left)
 
 // Trend rows, as in picture 07: a coloured arrow, then the word in the text colour.
 f_dashTrend(table t, int row, string name, float ema) =>
     bool has = not na(ema)
     bool up  = has and close > ema
-    table.cell(t, 2, row, name, text_color = C_MUTED, text_size = size.small, text_halign = text.align_right)
-    table.cell(t, 0, row, has ? (up ? "▲" : "▼") : "—", text_color = has ? (up ? C_UP : C_DOWN) : C_MUTED, text_size = size.small, text_halign = text.align_left)
-    table.cell(t, 1, row, has ? (up ? "صاعد" : "هابط") : "", text_color = chart.fg_color, text_size = size.small, text_halign = text.align_left)
+    table.cell(t, 2, row, name, text_color = C_MUTED, text_size = SZ_DASH, text_halign = text.align_right)
+    table.cell(t, 0, row, has ? (up ? "▲" : "▼") : "—", text_color = has ? (up ? C_UP : C_DOWN) : C_MUTED, text_size = SZ_DASH, text_halign = text.align_left)
+    table.cell(t, 1, row, has ? (up ? "صاعد" : "هابط") : "", text_color = chart.fg_color, text_size = SZ_DASH, text_halign = text.align_left)
 
 // Status of the latest signal from its TP1 trade.
 f_status(Trade t) =>
@@ -626,14 +716,19 @@ f_statRow(table t, int row, string name, Stat st) =>
     color dc = na(df) ? C_MUTED : df > DIFF_GOOD and st.n1 >= N_GOOD ? C_GOOD : df < 0 ? C_BAD : C_MUTED
     array<string> cells = array.from(f_sgn(p2, "0.00"), f_pct(c2), f_pct(w2), f_sgn(p1, "0.00"), f_sgn(df, "0.0"), f_pct(c1), f_pct(w1), str.tostring(st.n1), name)
     for k = 0 to 8
-        table.cell(t, k, row, cells.get(k), text_color = k == 4 ? dc : chart.fg_color, text_size = size.small, text_halign = text.align_right)
+        table.cell(t, k, row, cells.get(k), text_color = k == 4 ? dc : chart.fg_color, text_size = SZ_STAT, text_halign = text.align_right)
 
 // One row of the results table, columns right to left: grade, then for TP1 and for TP2 the trades
-// that reached the target (✓), hit the stop (✗) and closed on the time stop (⌛).
+// that reached the target (✓), hit the stop (✗), closed on the time stop (⌛) and their net total
+// in $ after costs, green when above zero and red when below.
 f_resRow(table t, int row, string name, Stat st) =>
-    array<string> cells = array.from(str.tostring(st.ts2), str.tostring(st.sl2), str.tostring(st.w2), str.tostring(st.ts1), str.tostring(st.sl1), str.tostring(st.w1), name)
-    for k = 0 to 6
-        table.cell(t, k, row, cells.get(k), text_color = chart.fg_color, text_size = size.small, text_halign = k == 6 ? text.align_right : text.align_center)
+    array<string> cells = array.from(f_usd(st.p2, st.n2), str.tostring(st.ts2), str.tostring(st.sl2), str.tostring(st.w2), f_usd(st.p1, st.n1), str.tostring(st.ts1), str.tostring(st.sl1), str.tostring(st.w1), name)
+    for k = 0 to 8
+        bool  usd = k == 0 or k == 4
+        float p   = k == 0 ? st.p2 : st.p1
+        int   n   = k == 0 ? st.n2 : st.n1
+        color c   = not usd ? chart.fg_color : n == 0 or p == 0 ? C_MUTED : p > 0 ? C_GOOD : C_BAD
+        table.cell(t, k, row, cells.get(k), text_color = c, bgcolor = usd and n > 0 and p != 0 ? color.new(c, 85) : na, text_size = SZ_RES, text_halign = k == 8 ? text.align_right : text.align_center)
 
 // ───── Data, read on every bar (spec 4.11 rule 2) ────────────────────────────────────────
 // Chart-TF swing confirmed at this bar's close (spec 2.1): the bar swingLen back is strictly
@@ -822,9 +917,9 @@ alertcondition(firedA, "GLM: any A sweep", "GLM: A sweep on {{ticker}} {{interva
 alertcondition(firedAB, "GLM: any A or B sweep", "GLM: A or B sweep on {{ticker}} {{interval}}, close {{close}}")
 
 // ───── Display: reads the engine's state, never changes it ───────────────────────────────
-var table dash  = showDash ? table.new(position.top_right, 3, 9, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
-var table stTbl = showStats ? table.new(position.bottom_right, 9, 7, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
-var table rsTbl = showResults ? table.new(position.middle_right, 7, 7, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
+var table dash  = showDash ? table.new(f_pos(dashPos), 3, 9, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
+var table stTbl = showStats ? table.new(f_pos(statPos), 9, 7, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
+var table rsTbl = showResults ? table.new(f_pos(resPos), 9, 8, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
 
 if barstate.isfirst
     if drawNearest > 0
@@ -848,17 +943,19 @@ if barstate.isfirst
         table.merge_cells(stTbl, 0, 6, 4, 6)           // footer, left: legend
         table.merge_cells(stTbl, 5, 6, 8, 6)           // footer, right: dates and bars
     if not na(rsTbl)
-        table.merge_cells(rsTbl, 0, 0, 6, 0)           // title
-        table.merge_cells(rsTbl, 3, 1, 5, 1)           // TP1 over its three columns
-        table.merge_cells(rsTbl, 0, 1, 2, 1)           // TP2 over its three columns
-        table.merge_cells(rsTbl, 6, 1, 6, 2)           // grade over both header rows
+        table.merge_cells(rsTbl, 0, 0, 8, 0)           // title
+        table.merge_cells(rsTbl, 4, 1, 7, 1)           // TP1 over its four columns
+        table.merge_cells(rsTbl, 0, 1, 3, 1)           // TP2 over its four columns
+        table.merge_cells(rsTbl, 8, 1, 8, 2)           // grade over both header rows
+        table.merge_cells(rsTbl, 0, 7, 8, 7)           // footer
 
 if barstate.islast
     f_drawPool(showLevels ? above : array.new<Liq>(), poolLnUp, poolLbUp)
     f_drawPool(showLevels ? below : array.new<Liq>(), poolLnDn, poolLbDn)
     f_drawPlan(planT)
+    f_spreadLabels()
     if not na(dash)
-        table.cell(dash, 0, 0, "GLM · لوحة القراءة", text_color = chart.fg_color, text_size = size.small, text_halign = text.align_right)
+        table.cell(dash, 0, 0, "GLM · لوحة القراءة", text_color = chart.fg_color, text_size = SZ_DASH, text_halign = text.align_right)
         f_dashTrend(dash, 1, "ترند الساعة", ema1H)
         f_dashTrend(dash, 2, "ترند 4 ساعات", ema4H)
         f_dashTrend(dash, 3, "الترند اليومي", emaD)
@@ -871,26 +968,28 @@ if barstate.islast
     string t2Txt = targetMode == "$" ? str.tostring(tp2, "#.##") + "$" : str.tostring(tp2Atr, "#.##") + "×ATR"
     if not na(stTbl)
         array<string> head = array.from("$/صفقة", "الصدفة", "ربح " + t2Txt, "$/صفقة", "الفرق", "الصدفة", "ربح " + t1Txt, "العدد", "التصنيف")
-        table.cell(stTbl, 0, 0, "جدول الإحصاءات الحي", text_color = chart.fg_color, text_size = size.small, text_halign = text.align_right)
+        table.cell(stTbl, 0, 0, "جدول الإحصاءات الحي", text_color = chart.fg_color, text_size = SZ_STAT, text_halign = text.align_right)
         for k = 0 to 8
-            table.cell(stTbl, k, 1, head.get(k), text_color = C_MUTED, text_size = size.tiny, text_halign = text.align_right)
+            table.cell(stTbl, k, 1, head.get(k), text_color = C_MUTED, text_size = SZ_STATH, text_halign = text.align_right)
         f_statRow(stTbl, 2, "الكل", stAll)
         f_statRow(stTbl, 3, "A", stA)
         f_statRow(stTbl, 4, "B", stB)
         f_statRow(stTbl, 5, "AVOID", stAvoid)
-        table.cell(stTbl, 0, 6, "الصدفة = نسبة رمي العملة · الفرق ≤ 0 يعني لا ميزة", text_color = C_MUTED, text_size = size.tiny, text_halign = text.align_left)
-        table.cell(stTbl, 5, 6, f_date(winFrom) + " → " + f_date(winTo) + " · " + str.tostring(winBars) + " شمعة", text_color = C_MUTED, text_size = size.tiny, text_halign = text.align_right)
+        table.cell(stTbl, 0, 6, "الصدفة = نسبة رمي العملة · الفرق ≤ 0 يعني لا ميزة", text_color = C_MUTED, text_size = SZ_STATH, text_halign = text.align_left)
+        table.cell(stTbl, 5, 6, f_date(winFrom) + " → " + f_date(winTo) + " · " + str.tostring(winBars) + " شمعة", text_color = C_MUTED, text_size = SZ_STATH, text_halign = text.align_right)
     if not na(rsTbl)
-        table.cell(rsTbl, 0, 0, "نتائج الصفقات", text_color = chart.fg_color, text_size = size.small, text_halign = text.align_right)
-        table.cell(rsTbl, 6, 1, "التصنيف", text_color = C_MUTED, text_size = size.tiny, text_halign = text.align_right)
-        table.cell(rsTbl, 3, 1, "هدف " + t1Txt, text_color = C_MUTED, text_size = size.tiny, text_halign = text.align_center)
-        table.cell(rsTbl, 0, 1, "هدف " + t2Txt, text_color = C_MUTED, text_size = size.tiny, text_halign = text.align_center)
+        table.cell(rsTbl, 0, 0, "نتائج الصفقات", text_color = chart.fg_color, text_size = SZ_RES, text_halign = text.align_right)
+        table.cell(rsTbl, 8, 1, "التصنيف", text_color = C_MUTED, text_size = SZ_RESH, text_halign = text.align_right)
+        table.cell(rsTbl, 4, 1, "هدف " + t1Txt, text_color = C_MUTED, text_size = SZ_RESH, text_halign = text.align_center)
+        table.cell(rsTbl, 0, 1, "هدف " + t2Txt, text_color = C_MUTED, text_size = SZ_RESH, text_halign = text.align_center)
         for g = 0 to 1
-            int k0 = 3 * g
-            table.cell(rsTbl, k0 + 2, 2, "✓ هدف", text_color = C_GOOD, text_size = size.tiny, text_halign = text.align_center)
-            table.cell(rsTbl, k0 + 1, 2, "✗ ستوب", text_color = C_BAD, text_size = size.tiny, text_halign = text.align_center)
-            table.cell(rsTbl, k0, 2, "⌛ وقت", text_color = C_MUTED, text_size = size.tiny, text_halign = text.align_center)
+            int k0 = 4 * g
+            table.cell(rsTbl, k0 + 3, 2, "✓ هدف", text_color = C_GOOD, text_size = SZ_RESH, text_halign = text.align_center)
+            table.cell(rsTbl, k0 + 2, 2, "✗ ستوب", text_color = C_BAD, text_size = SZ_RESH, text_halign = text.align_center)
+            table.cell(rsTbl, k0 + 1, 2, "⌛ وقت", text_color = C_MUTED, text_size = SZ_RESH, text_halign = text.align_center)
+            table.cell(rsTbl, k0, 2, "المجموع $", text_color = C_MUTED, text_size = SZ_RESH, text_halign = text.align_center)
         f_resRow(rsTbl, 3, "الكل", stAll)
         f_resRow(rsTbl, 4, "A", stA)
         f_resRow(rsTbl, 5, "B", stB)
         f_resRow(rsTbl, 6, "AVOID", stAvoid)
+        table.cell(rsTbl, 0, 7, "المجموع بالدولار لأونصة وحدة (0.01 لوت)، بعد تكلفة " + str.tostring(cost, "#.##") + "$ للصفقة", text_color = C_MUTED, text_size = SZ_RESH, text_halign = text.align_right)
