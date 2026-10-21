@@ -2,8 +2,8 @@
 indicator("Gold Liquidity Map", shorttitle = "GLM", overlay = true, max_lines_count = 500, max_labels_count = 500)
 
 // ═════════════════════════════════════════════════════════════════════════════════════════
-// Gold Liquidity Map (GLM) - XAUUSD 15m.  Stage 2 of 6: liquidity levels + sweep detection.
-// Spec:  GOLD_LIQUIDITY_INDICATOR_SPEC.md  (2.1-2.3, 4.3-4.5, 4.7, 4.11)
+// Gold Liquidity Map (GLM) - XAUUSD 15m.  Stage 3 of 6: levels, sweeps, context grade, reading panel.
+// Spec:  GOLD_LIQUIDITY_INDICATOR_SPEC.md  (2.1-2.3, 2.6, 2.7, 4.3-4.7, 4.9, 4.11)
 // Logic: research/sweep_engine.py is the reference; when in doubt, the code there decides.
 // No repaint: the engine runs on confirmed bars only, every higher-timeframe value comes from
 // an HTF bar that has already closed, and a signal is drawn on the bar whose close completes it.
@@ -13,6 +13,7 @@ indicator("Gold Liquidity Map", shorttitle = "GLM", overlay = true, max_lines_co
 // ───── Inputs (spec 4.2) ─────────────────────────────────────────────────────────────────
 string GL = "Levels"
 string GS = "Sweep"
+string GC = "Context"
 string GD = "Display"
 
 int    swingLen         = input.int(5, "Swing length, chart TF", minval = 1, group = GL)
@@ -30,8 +31,17 @@ int    candleBars       = input.int(2, "Candle-sweep window (bars)", minval = 1,
 float  minPen           = input.float(0.0, "Min penetration to take a level ($)", minval = 0.0, step = 0.1, group = GS)
 bool   useW             = input.bool(true, "Wick sweeps (W)", group = GS)
 bool   useC             = input.bool(true, "Candle sweeps (C)", group = GS)
+string trendTF          = input.timeframe("60", "Trend timeframe", group = GC)
+int    trendLen         = input.int(50, "Trend EMA length", minval = 1, group = GC)
+float  roundStep        = input.float(50.0, "Round number step ($)", minval = 0.01, group = GC)
+float  roundTol         = input.float(3.0, "Round number tolerance ($)", minval = 0.0, group = GC)
+bool   avoidAsia        = input.bool(true, "AVOID: Asia session", group = GC)
+bool   avoidRound       = input.bool(true, "AVOID: near a round number", group = GC)
+bool   avoidCounter     = input.bool(true, "AVOID: against the trend", group = GC)
 bool   showLevels       = input.bool(true, "Show levels", group = GD)
 bool   showSignals      = input.bool(true, "Show signals", group = GD)
+bool   showDash         = input.bool(true, "Show reading panel", group = GD)
+bool   showAvoid        = input.bool(true, "Show AVOID signals (grey)", group = GD)
 
 // ───── Constants ─────────────────────────────────────────────────────────────────────────
 color  C_CHART   = #2a78d6   // chart-TF swings
@@ -42,6 +52,14 @@ int    TR_ENDED  = 40        // transparency of a day / week / Asia line that ex
 int    MAX_LINES  = 500      // = max_lines_count. History lines are trimmed below it, so TradingView
                              //   never auto-deletes the reused pool lines
 int    MAX_LABELS = 500      // = max_labels_count. Same rule for signal markers vs pool labels
+int    ATR_LEN    = 14       // ATR(14) on the chart TF (spec 2.6)
+int    NY_ASIA    = 18       // sessions by the New York hour of the bar's open (spec 2.6):
+int    NY_LONDON  = 2        //   Asia 18-02, London 02-08, NY morning 08-12, NY afternoon 12-17
+int    NY_AM      = 8
+int    NY_PM      = 12
+int    EMA_1H     = 50       // reading-panel trends (spec 4.9): EMA50 1H, EMA50 4H, EMA20 daily
+int    EMA_4H     = 50
+int    EMA_D      = 20
 string TF_TXT     = timeframe.isseconds ? str.tostring(timeframe.multiplier) + "s" : timeframe.isminutes ? str.tostring(timeframe.multiplier) + "m" : timeframe.period
 
 // ───── Levels (spec 4.4) ─────────────────────────────────────────────────────────────────
@@ -68,6 +86,10 @@ type Sig
     float      ext       // sweep extreme: the farthest point beyond the levels
     float      ref       // nearest swept level
     array<Liq> levels    // every level swept
+    string     grade     // "A", "B" or "AVOID" (spec 2.7)
+    string     sess      // "asia", "london", "ny_am", "ny_pm"
+    int        trend     // 1 = with the trend, -1 = against it, 0 = no trend value yet
+    float      roundHit  // the round number a swept level sits near, or na
 
 var array<Liq>   above    = array.new<Liq>()     // nearest first: ascending price
 var array<Liq>   below    = array.new<Liq>()     // nearest first: descending price
@@ -78,6 +100,7 @@ var array<label> poolLbUp = array.new<label>()
 var array<label> poolLbDn = array.new<label>()
 var array<Pend>  pending  = array.new<Pend>()    // candle sweeps in the making
 var array<label> sigLb    = array.new<label>()   // signal markers, oldest first
+var string       lastSig  = "—"                  // reading panel: the last signal
 var int          nextExp  = na                   // earliest expiry among stored levels
 var float        asiaHi   = na                   // Asia range, tracked on chart bars
 var float        asiaLo   = na
@@ -137,6 +160,44 @@ f_kindsText(array<Liq> lvs) =>
 // Label of a level line, e.g. "15m + 1H + PDH  4193.1"
 f_groupText(array<Liq> grp) =>
     f_kindsText(grp) + "  " + str.tostring(grp.first().price, "#.0")
+
+// "60" -> "1H", "15" -> "15m", "D" -> "D"
+f_tfText(string tf) =>
+    int sec = timeframe.in_seconds(tf)
+    sec >= 86400 ? tf : sec >= 3600 ? str.tostring(sec / 3600, "#") + "H" : str.tostring(sec / 60, "#") + "m"
+
+// ───── Context (spec 2.6, 4.6) ───────────────────────────────────────────────────────────
+// Session by the New York hour of the bar's open.
+f_session(int t) =>
+    int h = hour(t, "America/New_York")
+    h >= NY_ASIA or h < NY_LONDON ? "asia" : h < NY_AM ? "london" : h < NY_PM ? "ny_am" : "ny_pm"
+
+f_sessionEn(string s) =>
+    s == "asia" ? "Asia" : s == "london" ? "London" : s == "ny_am" ? "NY morning" : "NY afternoon"
+
+f_sessionAr(string s) =>
+    s == "asia" ? "آسيا" : s == "london" ? "لندن" : s == "ny_am" ? "صباح نيويورك" : "بعد ظهر نيويورك"
+
+// The round number (multiple of roundStep) that a swept level sits within roundTol of, or na.
+f_roundNear(array<Liq> lvs) =>
+    float hit = na
+    for x in lvs
+        float r = math.round(x.price / roundStep) * roundStep
+        if math.abs(x.price - r) <= roundTol
+            hit := r
+            break
+    hit
+
+// Grade (spec 2.7). Trend = this close against the trend EMA of closed trendTF bars; as in the
+// reference, no EMA value yet counts as neither with nor against.
+f_grade(Sig s, float ema) =>
+    int tDir    = na(ema) ? 0 : close > ema ? 1 : close < ema ? -1 : 0
+    s.sess     := f_session(time)
+    s.trend    := -s.side * tDir                    // sweeping tops is a sell: trade direction = -side
+    s.roundHit := f_roundNear(s.levels)
+    bool avoid  = (avoidAsia and s.sess == "asia") or (avoidRound and not na(s.roundHit)) or (avoidCounter and s.trend == -1)
+    s.grade    := avoid ? "AVOID" : s.trend == 1 and (s.sess == "london" or s.sess == "ny_am") ? "A" : "B"
+    s.grade
 
 // ───── Level engine ──────────────────────────────────────────────────────────────────────
 // Insert keeping the side sorted nearest-first. Beyond maxLevelsPerSide the oldest level is dropped.
@@ -235,16 +296,22 @@ f_keepSig(label lb) =>
         label.delete(sigLb.shift())
 
 // Marker on the bar whose close completes the sweep (spec 4.7): ▼ over swept tops (sell),
-// ▲ under swept bottoms (buy), with the sweep type as text. The tooltip says what was swept.
+// ▲ under swept bottoms (buy), with "type · grade" as text. A and B in the chart's text colour,
+// AVOID in grey. The tooltip says what was swept and in which context.
 f_drawSignal(Sig s) =>
-    if showSignals
+    bool avoid = s.grade == "AVOID"
+    if showSignals and (showAvoid or not avoid)
         bool   top = s.side == 1
-        string tt  = (top ? "SELL" : "BUY") + " · " + s.typ
+        string tag = s.typ + " · " + s.grade
+        string tt  = (top ? "SELL" : "BUY") + " · " + tag
         tt += "\nswept " + f_kindsText(s.levels) + " @ " + str.tostring(s.ref, "#.00")
         tt += "\nsweep extreme " + str.tostring(s.ext, "#.00")
         tt += "\nentry " + str.tostring(close, "#.00")
-        string txt = top ? s.typ + "\n▼" : "▲\n" + s.typ
-        f_keepSig(label.new(bar_index, close, txt, yloc = top ? yloc.abovebar : yloc.belowbar, color = na, style = top ? label.style_label_down : label.style_label_up, textcolor = chart.fg_color, size = size.small, tooltip = tt))
+        tt += "\n" + f_sessionEn(s.sess) + " · " + f_tfText(trendTF) + " trend: " + (s.trend == 1 ? "with" : s.trend == -1 ? "against" : "n/a")
+        if not na(s.roundHit)
+            tt += " · near " + str.tostring(s.roundHit, "#")
+        color col = avoid ? color.new(chart.fg_color, 50) : chart.fg_color
+        f_keepSig(label.new(bar_index, close, top ? tag + "\n▼" : "▲\n" + tag, yloc = top ? yloc.abovebar : yloc.belowbar, color = na, style = top ? label.style_label_down : label.style_label_up, textcolor = col, size = size.small, tooltip = tt))
 
 // ───── Sweep detection (spec 2.3, 4.5) ───────────────────────────────────────────────────
 // Step 4 for one side: the levels this bar crossed after opening on the near side of them.
@@ -318,6 +385,27 @@ f_drawPool(array<Liq> arr, array<line> lns, array<label> lbs) =>
         lbs.get(g).set_text("")
         g += 1
 
+// ───── Reading panel (spec 4.9) ──────────────────────────────────────────────────────────
+f_trendText(float ema) =>
+    na(ema) ? "—" : close > ema ? "▲ صاعد" : "▼ هابط"
+
+// Nearest active level on one side: "4201.9 · 15m · 13.1$"
+f_nearestText(array<Liq> arr) =>
+    string out = "—"
+    if arr.size() > 0
+        Liq first = arr.first()
+        array<Liq> grp = array.new<Liq>()
+        for x in arr
+            if not f_samePx(x.price, first.price)
+                break
+            grp.push(x)
+        out := str.tostring(first.price, "#.0") + " · " + f_kindsText(grp) + " · " + str.tostring(math.abs(first.price - close), "#.0") + "$"
+    out
+
+f_dashRow(table t, int row, string name, string val) =>
+    table.cell(t, 1, row, name, text_color = color.new(chart.fg_color, 40), text_size = size.small, text_halign = text.align_right)
+    table.cell(t, 0, row, val, text_color = chart.fg_color, text_size = size.small, text_halign = text.align_left)
+
 // ───── Data, read on every bar (spec 4.11 rule 2) ────────────────────────────────────────
 // Chart-TF swing confirmed at this bar's close (spec 2.1): the bar swingLen back is strictly
 // above the swingLen bars before it and >= the swingLen bars after it (mirror for lows).
@@ -326,19 +414,23 @@ float llC   = ta.lowest(low, swingLen)
 float pivHi = high[swingLen] > hhC[swingLen + 1] and high[swingLen] >= hhC ? high[swingLen] : na
 float pivLo = low[swingLen] < llC[swingLen + 1] and low[swingLen] <= llC ? low[swingLen] : na
 
-// The same swing rule on the higher timeframe, for the last CLOSED HTF bar. Every value here is
-// [1] or older, so lookahead_on only places it on the first chart bar after that HTF bar closed (spec 4.3).
-f_htfSwing(int k) =>
+// The same swing rule on the higher timeframe, for the last CLOSED HTF bar, plus that bar's EMA for
+// the reading panel. Every value here is [1] or older, so lookahead_on only places it on the first
+// chart bar after that HTF bar closed (spec 4.3).
+f_htfSwing(int k, int emaLen) =>
     float hh = ta.highest(high, k)
     float ll = ta.lowest(low, k)
     float ph = high[k + 1] > hh[k + 2] and high[k + 1] >= hh[1] ? high[k + 1] : na
     float pl = low[k + 1] < ll[k + 2] and low[k + 1] <= ll[1] ? low[k + 1] : na
-    [ph, pl, time[k + 1]]
+    [ph, pl, time[k + 1], ta.ema(close, emaLen)[1]]
 
-[h1Hi, h1Lo, h1T] = request.security(syminfo.tickerid, "60", f_htfSwing(htfLen), lookahead = barmerge.lookahead_on)
-[h4Hi, h4Lo, h4T] = request.security(syminfo.tickerid, "240", f_htfSwing(htfLen), lookahead = barmerge.lookahead_on)
-[pdHi, pdLo, pdT] = request.security(syminfo.tickerid, "D", [high[1], low[1], time[1]], lookahead = barmerge.lookahead_on)
-[pwHi, pwLo, pwT] = request.security(syminfo.tickerid, "W", [high[1], low[1], time[1]], lookahead = barmerge.lookahead_on)
+[h1Hi, h1Lo, h1T, ema1H] = request.security(syminfo.tickerid, "60", f_htfSwing(htfLen, EMA_1H), lookahead = barmerge.lookahead_on)
+[h4Hi, h4Lo, h4T, ema4H] = request.security(syminfo.tickerid, "240", f_htfSwing(htfLen, EMA_4H), lookahead = barmerge.lookahead_on)
+[pdHi, pdLo, pdT, emaD]  = request.security(syminfo.tickerid, "D", [high[1], low[1], time[1], ta.ema(close, EMA_D)[1]], lookahead = barmerge.lookahead_on)
+[pwHi, pwLo, pwT]        = request.security(syminfo.tickerid, "W", [high[1], low[1], time[1]], lookahead = barmerge.lookahead_on)
+// Trend for the grade (spec 2.6): EMA of closed trendTF bars, known before this bar opened.
+float emaTrend = request.security(syminfo.tickerid, trendTF, ta.ema(close, trendLen)[1], lookahead = barmerge.lookahead_on)
+float atrNow   = ta.atr(ATR_LEN)
 
 bool newH1     = nz(ta.change(time("60"))) != 0
 bool newH4     = nz(ta.change(time("240"))) != 0
@@ -427,9 +519,12 @@ if barstate.isconfirmed
         sigDn := f_addSig(sigDn, -1, "W", wDn.levels, wDn.ext, wDn.ref)
 
     // 5. One signal per bar, at this close. A bar that sweeps both sides is ambiguous: no signal,
-    //    though its levels are still used up. (Stage 3 adds the grade, stage 5 the alert.)
+    //    though its levels are still used up. Grade it, draw it. (Stage 5 adds the alert.)
     if na(sigUp) != na(sigDn)
-        f_drawSignal(na(sigUp) ? sigDn : sigUp)
+        Sig s = na(sigUp) ? sigDn : sigUp
+        f_grade(s, emaTrend)
+        f_drawSignal(s)
+        lastSig := (s.side == 1 ? "بيع" : "شراء") + " · " + s.typ + " · " + s.grade
 
     // 6. (stage 4) virtual trades for the statistics table.
 
@@ -454,6 +549,18 @@ if barstate.isfirst and drawNearest > 0
         poolLbUp.push(label.new(bar_index, close, "", color = na, style = label.style_label_left, textcolor = na, size = size.small))
         poolLbDn.push(label.new(bar_index, close, "", color = na, style = label.style_label_left, textcolor = na, size = size.small))
 
+var table dash = showDash ? table.new(position.top_right, 2, 9, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
+
 if barstate.islast
     f_drawPool(showLevels ? above : array.new<Liq>(), poolLnUp, poolLbUp)
     f_drawPool(showLevels ? below : array.new<Liq>(), poolLnDn, poolLbDn)
+    if not na(dash)
+        table.cell(dash, 1, 0, "GLM · لوحة القراءة", text_color = chart.fg_color, text_size = size.small, text_halign = text.align_right)
+        f_dashRow(dash, 1, "ترند الساعة", f_trendText(ema1H))
+        f_dashRow(dash, 2, "ترند 4 ساعات", f_trendText(ema4H))
+        f_dashRow(dash, 3, "الترند اليومي", f_trendText(emaD))
+        f_dashRow(dash, 4, "الجلسة", f_sessionAr(f_session(time)))
+        f_dashRow(dash, 5, "ATR(" + str.tostring(ATR_LEN) + ")", str.tostring(atrNow, "#.0") + "$")
+        f_dashRow(dash, 6, "أقرب سيولة فوق", f_nearestText(above))
+        f_dashRow(dash, 7, "أقرب سيولة تحت", f_nearestText(below))
+        f_dashRow(dash, 8, "آخر إشارة", lastSig)
