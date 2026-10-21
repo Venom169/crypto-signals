@@ -2,11 +2,11 @@
 indicator("Gold Liquidity Map", shorttitle = "GLM", overlay = true, max_lines_count = 500, max_labels_count = 500)
 
 // ═════════════════════════════════════════════════════════════════════════════════════════
-// Gold Liquidity Map (GLM) - XAUUSD 15m.  Stage 1 of 6: liquidity levels only.
-// Spec:  GOLD_LIQUIDITY_INDICATOR_SPEC.md  (2.1, 2.2, 4.3, 4.4, 4.11)
+// Gold Liquidity Map (GLM) - XAUUSD 15m.  Stage 2 of 6: liquidity levels + sweep detection.
+// Spec:  GOLD_LIQUIDITY_INDICATOR_SPEC.md  (2.1-2.3, 4.3-4.5, 4.7, 4.11)
 // Logic: research/sweep_engine.py is the reference; when in doubt, the code there decides.
-// No repaint: the engine runs on confirmed bars only, and every higher-timeframe value
-// comes from an HTF bar that has already closed.
+// No repaint: the engine runs on confirmed bars only, every higher-timeframe value comes from
+// an HTF bar that has already closed, and a signal is drawn on the bar whose close completes it.
 // A chart-reading tool. It promises no profit; the live statistics table (stage 4) is the judge.
 // ═════════════════════════════════════════════════════════════════════════════════════════
 
@@ -26,8 +26,12 @@ bool   useAsia          = input.bool(true, "Asia range", group = GL)
 string asiaSess         = input.session("0000-0600", "Asia session (UTC)", group = GL)
 int    maxLevelsPerSide = input.int(200, "Max stored levels per side", minval = 1, group = GL)
 int    drawNearest      = input.int(12, "Levels drawn per side (nearest)", minval = 0, maxval = 100, group = GL)
+int    candleBars       = input.int(2, "Candle-sweep window (bars)", minval = 1, group = GS)
 float  minPen           = input.float(0.0, "Min penetration to take a level ($)", minval = 0.0, step = 0.1, group = GS)
+bool   useW             = input.bool(true, "Wick sweeps (W)", group = GS)
+bool   useC             = input.bool(true, "Candle sweeps (C)", group = GS)
 bool   showLevels       = input.bool(true, "Show levels", group = GD)
+bool   showSignals      = input.bool(true, "Show signals", group = GD)
 
 // ───── Constants ─────────────────────────────────────────────────────────────────────────
 color  C_CHART   = #2a78d6   // chart-TF swings
@@ -35,9 +39,10 @@ color  C_HTF     = #eb6834   // 1H / 4H swings
 color  C_CAL     = #1baf7a   // previous day / week, Asia range
 int    TR_TAKEN  = 70        // transparency of a line whose level was taken
 int    TR_ENDED  = 40        // transparency of a day / week / Asia line that expired untouched
-int    MAX_LINES = 500       // = max_lines_count. History lines are trimmed below it, so TradingView
+int    MAX_LINES  = 500      // = max_lines_count. History lines are trimmed below it, so TradingView
                              //   never auto-deletes the reused pool lines
-string TF_TXT    = timeframe.isseconds ? str.tostring(timeframe.multiplier) + "s" : timeframe.isminutes ? str.tostring(timeframe.multiplier) + "m" : timeframe.period
+int    MAX_LABELS = 500      // = max_labels_count. Same rule for signal markers vs pool labels
+string TF_TXT     = timeframe.isseconds ? str.tostring(timeframe.multiplier) + "s" : timeframe.isminutes ? str.tostring(timeframe.multiplier) + "m" : timeframe.period
 
 // ───── Levels (spec 4.4) ─────────────────────────────────────────────────────────────────
 type Liq
@@ -48,6 +53,22 @@ type Liq
     int    expiry    // na = never expires
     line   ln        // the level's own line once it has ended (taken or expired)
 
+// A break waiting for a close back inside: a candle sweep in the making (spec 2.3, C).
+type Pend
+    int        side      // 1 = tops, -1 = bottoms
+    float      ref       // nearest level the break bar crossed
+    float      ext       // sweep extreme so far
+    int        barIdx    // bar_index of the break
+    array<Liq> levels    // the levels the break bar crossed
+
+// The sweep found on one side of one bar.
+type Sig
+    int        side      // 1 = tops swept (sell), -1 = bottoms swept (buy)
+    string     typ       // "W", "C" or "W+C"
+    float      ext       // sweep extreme: the farthest point beyond the levels
+    float      ref       // nearest swept level
+    array<Liq> levels    // every level swept
+
 var array<Liq>   above    = array.new<Liq>()     // nearest first: ascending price
 var array<Liq>   below    = array.new<Liq>()     // nearest first: descending price
 var array<line>  histLn   = array.new<line>()    // lines of ended levels, oldest first
@@ -55,6 +76,8 @@ var array<line>  poolLnUp = array.new<line>()    // reused lines for the nearest
 var array<line>  poolLnDn = array.new<line>()
 var array<label> poolLbUp = array.new<label>()
 var array<label> poolLbDn = array.new<label>()
+var array<Pend>  pending  = array.new<Pend>()    // candle sweeps in the making
+var array<label> sigLb    = array.new<label>()   // signal markers, oldest first
 var int          nextExp  = na                   // earliest expiry among stored levels
 var float        asiaHi   = na                   // Asia range, tracked on chart bars
 var float        asiaLo   = na
@@ -101,15 +124,19 @@ f_groupBorn(array<Liq> grp) =>
         b := math.min(b, x.born)
     b
 
-// Label text, e.g. "15m + 1H + PDH  4193.1"
-f_groupText(array<Liq> grp) =>
+// Names of the kinds in rank order, each once, e.g. "15m + 1H + PDH"
+f_kindsText(array<Liq> lvs) =>
     string txt = ""
     for r = 1 to 6
-        for x in grp
+        for x in lvs
             if f_rank(x.kind) == r
                 txt += (txt == "" ? "" : " + ") + f_kindText(x.kind, x.side)
                 break
-    txt + "  " + str.tostring(grp.first().price, "#.0")
+    txt
+
+// Label of a level line, e.g. "15m + 1H + PDH  4193.1"
+f_groupText(array<Liq> grp) =>
+    f_kindsText(grp) + "  " + str.tostring(grp.first().price, "#.0")
 
 // ───── Level engine ──────────────────────────────────────────────────────────────────────
 // Insert keeping the side sorted nearest-first. Beyond maxLevelsPerSide the oldest level is dropped.
@@ -162,9 +189,9 @@ f_keepHist(line ln) =>
     while histLn.size() > math.max(MAX_LINES - 2 * drawNearest, 0)
         line.delete(histLn.shift())
 
-// Levels that just ended: one line per price, from the level's bar to x2.
-// Stage 1 draws every taken level solid and faded; stage 2 makes the swept ones dotted (spec 4.4).
-f_drawEnded(array<Liq> ended, int x2, bool taken) =>
+// Levels that just ended: one line per price, from the level's bar to x2 (spec 4.4).
+// mode 0 = expired untouched (solid), 1 = taken without a sweep (solid, faded), 2 = swept (dotted).
+f_drawEnded(array<Liq> ended, int x2, int mode) =>
     int n = ended.size()
     if showLevels and n > 0
         array<float> px = array.new<float>()
@@ -183,12 +210,81 @@ f_drawEnded(array<Liq> ended, int x2, bool taken) =>
                     break
                 grp.push(nx)
                 j += 1
-            line ln = line.new(f_groupBorn(grp), first.price, x2, first.price, xloc = xloc.bar_time, color = color.new(f_groupColor(grp), taken ? TR_TAKEN : TR_ENDED), style = line.style_solid, width = 1)
+            color col = f_groupColor(grp)
+            line ln = line.new(f_groupBorn(grp), first.price, x2, first.price, xloc = xloc.bar_time, color = mode == 2 ? col : color.new(col, mode == 1 ? TR_TAKEN : TR_ENDED), style = mode == 2 ? line.style_dotted : line.style_solid, width = 1)
             f_keepHist(ln)
             for k = 0 to grp.size() - 1
                 Liq y = grp.get(k)
                 y.ln := ln
             i := j
+
+// A break that became a candle sweep: its lines turn dotted, in the colour of their biggest kind.
+f_markSwept(array<Liq> lvs) =>
+    for x in lvs
+        if not na(x.ln)
+            string top = x.kind
+            for y in lvs
+                if y.side == x.side and f_samePx(y.price, x.price) and f_rank(y.kind) > f_rank(top)
+                    top := y.kind
+            line.set_style(x.ln, line.style_dotted)
+            line.set_color(x.ln, f_kindColor(top))
+
+f_keepSig(label lb) =>
+    sigLb.push(lb)
+    while sigLb.size() > math.max(MAX_LABELS - 2 * drawNearest, 0)
+        label.delete(sigLb.shift())
+
+// Marker on the bar whose close completes the sweep (spec 4.7): ▼ over swept tops (sell),
+// ▲ under swept bottoms (buy), with the sweep type as text. The tooltip says what was swept.
+f_drawSignal(Sig s) =>
+    if showSignals
+        bool   top = s.side == 1
+        string tt  = (top ? "SELL" : "BUY") + " · " + s.typ
+        tt += "\nswept " + f_kindsText(s.levels) + " @ " + str.tostring(s.ref, "#.00")
+        tt += "\nsweep extreme " + str.tostring(s.ext, "#.00")
+        tt += "\nentry " + str.tostring(close, "#.00")
+        string txt = top ? s.typ + "\n▼" : "▲\n" + s.typ
+        f_keepSig(label.new(bar_index, close, txt, yloc = top ? yloc.abovebar : yloc.belowbar, color = na, style = top ? label.style_label_down : label.style_label_up, textcolor = chart.fg_color, size = size.small, tooltip = tt))
+
+// ───── Sweep detection (spec 2.3, 4.5) ───────────────────────────────────────────────────
+// Step 4 for one side: the levels this bar crossed after opening on the near side of them.
+// Close back inside all of them = wick sweep (W); close beyond = a break that may become C.
+// Levels the bar opened beyond (a gap) are used up without a sweep.
+f_takeSide(array<Liq> taken, int side) =>
+    Sig w = na
+    if taken.size() > 0
+        array<Liq> crossed = array.new<Liq>()
+        array<Liq> gapped  = array.new<Liq>()
+        for x in taken
+            if (side == 1 ? open <= x.price : open >= x.price)
+                crossed.push(x)
+            else
+                gapped.push(x)
+        f_drawEnded(gapped, time, 1)
+        if crossed.size() > 0
+            float ref = crossed.first().price     // nearest crossed level
+            float ext = side == 1 ? high : low
+            if (side == 1 ? close < ref : close > ref)
+                f_drawEnded(crossed, time, 2)
+                if useW
+                    w := Sig.new(side, "W", ext, ref, crossed)
+            else
+                f_drawEnded(crossed, time, 1)
+                pending.push(Pend.new(side, ref, ext, bar_index, crossed))
+    w
+
+// One signal per side per bar: W with C gives "W+C"; the extreme is the farthest point,
+// the reference the nearest level.
+f_addSig(Sig cur, int side, string typ, array<Liq> lvs, float ext, float ref) =>
+    Sig s = cur
+    if na(s)
+        s := Sig.new(side, typ, ext, ref, lvs.copy())
+    else
+        s.typ := s.typ != typ ? "W+C" : typ
+        s.ext := side == 1 ? math.max(s.ext, ext) : math.min(s.ext, ext)
+        s.ref := side == 1 ? math.min(s.ref, ref) : math.max(s.ref, ref)
+        s.levels.concat(lvs)
+    s
 
 // Nearest active levels on one side: one reused line per price, from the level's bar to the
 // current bar, with its label. Unused pool lines and labels are hidden.
@@ -297,20 +393,45 @@ if barstate.isconfirmed
         array<Liq> gone = array.new<Liq>()
         f_expire(above, gone)
         f_expire(below, gone)
-        f_drawEnded(gone, time[1], false)
+        f_drawEnded(gone, time[1], 0)
         nextExp := f_minExpiry()
 
-    // 3. (stage 2) candle sweeps pending from earlier bars.
+    // 3. Candle sweeps (C) from breaks on earlier bars: this close is back inside the nearest
+    //    level the break crossed, within candleBars bars. The extreme runs from the break bar to here.
+    Sig sigUp = na
+    Sig sigDn = na
+    if pending.size() > 0
+        for i = pending.size() - 1 to 0
+            Pend p = pending.get(i)
+            p.ext := p.side == 1 ? math.max(p.ext, high) : math.min(p.ext, low)
+            if (p.side == 1 ? close < p.ref : close > p.ref)
+                f_markSwept(p.levels)
+                if useC and p.side == 1
+                    sigUp := f_addSig(sigUp, 1, "C", p.levels, p.ext, p.ref)
+                if useC and p.side == -1
+                    sigDn := f_addSig(sigDn, -1, "C", p.levels, p.ext, p.ref)
+                pending.remove(i)
+            else if bar_index - p.barIdx >= candleBars
+                pending.remove(i)
 
-    // 4. Levels taken by this bar.
+    // 4. Levels taken by this bar (spec 2.2): wick sweeps now, breaks wait for step 3.
     array<Liq> takenUp = array.new<Liq>()
     array<Liq> takenDn = array.new<Liq>()
     f_take(above, takenUp)
     f_take(below, takenDn)
-    f_drawEnded(takenUp, time, true)
-    f_drawEnded(takenDn, time, true)
+    Sig wUp = f_takeSide(takenUp, 1)
+    Sig wDn = f_takeSide(takenDn, -1)
+    if not na(wUp)
+        sigUp := f_addSig(sigUp, 1, "W", wUp.levels, wUp.ext, wUp.ref)
+    if not na(wDn)
+        sigDn := f_addSig(sigDn, -1, "W", wDn.levels, wDn.ext, wDn.ref)
 
-    // 5-6. (stages 2-4) signals, grades, alerts, virtual trades.
+    // 5. One signal per bar, at this close. A bar that sweeps both sides is ambiguous: no signal,
+    //    though its levels are still used up. (Stage 3 adds the grade, stage 5 the alert.)
+    if na(sigUp) != na(sigDn)
+        f_drawSignal(na(sigUp) ? sigDn : sigUp)
+
+    // 6. (stage 4) virtual trades for the statistics table.
 
     // Asia range on chart bars: restarts on the first bar of the session.
     if inAsia
