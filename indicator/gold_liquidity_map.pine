@@ -60,6 +60,8 @@ bool   showResults      = input.bool(true, "Show results table (target / stop / 
 bool   showDash         = input.bool(true, "Show reading panel", group = GD, display = display.none)
 bool   showAvoid        = input.bool(true, "Show AVOID signals (grey)", group = GD, display = display.none)
 string alertMin         = input.string("A", "Alert from grade", options = ["A", "B", "ALL"], group = GA, display = display.none)
+// Declared last so the saved values of the inputs above keep their place on the chart.
+float  minStop          = input.float(0.0, "Minimum stop ($), 0 = off", minval = 0.0, step = 0.5, group = GP, display = display.none)
 
 // ───── Constants ─────────────────────────────────────────────────────────────────────────
 bool   IS_DARK     = color.r(chart.bg_color) * 0.299 + color.g(chart.bg_color) * 0.587 + color.b(chart.bg_color) * 0.114 < 128
@@ -749,13 +751,13 @@ if barstate.isconfirmed
 
     // 5. One signal per bar, at this close. A bar that sweeps both sides is ambiguous: no signal,
     //    though its levels are still used up. Grade it, draw it, open its virtual trade (spec 2.4):
-    //    entry at this close, stop stopBuf beyond the sweep extreme, two targets. Then the alert:
-    //    once, at this close (spec 4.10).
+    //    entry at this close, stop stopBuf beyond the sweep extreme but never closer to the entry
+    //    than minStop, two targets. Then the alert: once, at this close (spec 4.10).
     if na(sigUp) != na(sigDn)
         Sig s = na(sigUp) ? sigDn : sigUp
         f_grade(s, emaTrend)
         int   d  = -s.side
-        float S  = math.abs(s.ext - close) + stopBuf
+        float S  = math.max(math.abs(s.ext - close) + stopBuf, minStop)
         float T1 = targetMode == "$" ? tp1 : tp1Atr * atrNow[1]
         float T2 = targetMode == "$" ? tp2 : tp2Atr * atrNow[1]
         Trade t  = Trade.new(d, s.grade, bar_index, close, close - d * S, close + d * T1, close + d * T2, S / (S + T1), S / (S + T2), time >= statsFrom and time < statsTo)
