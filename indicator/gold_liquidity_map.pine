@@ -3,7 +3,7 @@ indicator("Gold Liquidity Map", shorttitle = "GLM", overlay = true, max_lines_co
 
 // ═════════════════════════════════════════════════════════════════════════════════════════
 // Gold Liquidity Map (GLM) - XAUUSD 15m.  Stage 5 of 6: levels, sweeps, grade, reading panel,
-// virtual trades, the live statistics table and alerts.
+// virtual trades, the live statistics table, the results table and alerts.
 // Spec:  GOLD_LIQUIDITY_INDICATOR_SPEC.md  (2.1-2.7, 4.3-4.11)
 // Logic: research/sweep_engine.py is the reference; when in doubt, the code there decides.
 // No repaint: the engine runs on confirmed bars only, every higher-timeframe value comes from
@@ -56,6 +56,7 @@ bool   showLevels       = input.bool(true, "Show levels", group = GD, display = 
 bool   showSignals      = input.bool(true, "Show signals", group = GD, display = display.none)
 bool   showPlan         = input.bool(true, "Show trade plan (latest signal)", group = GD, display = display.none)
 bool   showStats        = input.bool(true, "Show statistics table", group = GD, display = display.none)
+bool   showResults      = input.bool(true, "Show results table (target / stop / time)", group = GD, display = display.none)
 bool   showDash         = input.bool(true, "Show reading panel", group = GD, display = display.none)
 bool   showAvoid        = input.bool(true, "Show AVOID signals (grey)", group = GD, display = display.none)
 string alertMin         = input.string("A", "Alert from grade", options = ["A", "B", "ALL"], group = GA, display = display.none)
@@ -135,14 +136,19 @@ type Trade
     int    exit1         // bar_index where each target's trade closed
     int    exit2
 
-// Totals of closed virtual trades for one row of the statistics table.
+// Totals of closed virtual trades for one row of the statistics and results tables.
+// Per target: closed (n) = target (w) + stop (sl) + time stop (ts).
 type Stat
     int   n1 = 0
     int   w1 = 0
+    int   sl1 = 0
+    int   ts1 = 0
     float c1 = 0.0
     float p1 = 0.0
     int   n2 = 0
     int   w2 = 0
+    int   sl2 = 0
+    int   ts2 = 0
     float c2 = 0.0
     float p2 = 0.0
 
@@ -519,11 +525,15 @@ f_addLeg(Stat st, int leg, int res, float coin, float pnl) =>
     if leg == 1
         st.n1 := st.n1 + 1
         st.w1 := st.w1 + (res == 1 ? 1 : 0)
+        st.sl1 := st.sl1 + (res == -1 ? 1 : 0)
+        st.ts1 := st.ts1 + (res == 2 ? 1 : 0)
         st.c1 := st.c1 + coin
         st.p1 := st.p1 + pnl
     else
         st.n2 := st.n2 + 1
         st.w2 := st.w2 + (res == 1 ? 1 : 0)
+        st.sl2 := st.sl2 + (res == -1 ? 1 : 0)
+        st.ts2 := st.ts2 + (res == 2 ? 1 : 0)
         st.c2 := st.c2 + coin
         st.p2 := st.p2 + pnl
 
@@ -615,6 +625,13 @@ f_statRow(table t, int row, string name, Stat st) =>
     array<string> cells = array.from(f_sgn(p2, "0.00"), f_pct(c2), f_pct(w2), f_sgn(p1, "0.00"), f_sgn(df, "0.0"), f_pct(c1), f_pct(w1), str.tostring(st.n1), name)
     for k = 0 to 8
         table.cell(t, k, row, cells.get(k), text_color = k == 4 ? dc : chart.fg_color, text_size = size.small, text_halign = text.align_right)
+
+// One row of the results table, columns right to left: grade, then for TP1 and for TP2 the trades
+// that reached the target (✓), hit the stop (✗) and closed on the time stop (⌛).
+f_resRow(table t, int row, string name, Stat st) =>
+    array<string> cells = array.from(str.tostring(st.ts2), str.tostring(st.sl2), str.tostring(st.w2), str.tostring(st.ts1), str.tostring(st.sl1), str.tostring(st.w1), name)
+    for k = 0 to 6
+        table.cell(t, k, row, cells.get(k), text_color = chart.fg_color, text_size = size.small, text_halign = k == 6 ? text.align_right : text.align_center)
 
 // ───── Data, read on every bar (spec 4.11 rule 2) ────────────────────────────────────────
 // Chart-TF swing confirmed at this bar's close (spec 2.1): the bar swingLen back is strictly
@@ -805,6 +822,7 @@ alertcondition(firedAB, "GLM: any A or B sweep", "GLM: A or B sweep on {{ticker}
 // ───── Display: reads the engine's state, never changes it ───────────────────────────────
 var table dash  = showDash ? table.new(position.top_right, 3, 9, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
 var table stTbl = showStats ? table.new(position.bottom_right, 9, 7, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
+var table rsTbl = showResults ? table.new(position.middle_right, 7, 7, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
 
 if barstate.isfirst
     if drawNearest > 0
@@ -827,6 +845,11 @@ if barstate.isfirst
         table.merge_cells(stTbl, 0, 0, 8, 0)           // title
         table.merge_cells(stTbl, 0, 6, 4, 6)           // footer, left: legend
         table.merge_cells(stTbl, 5, 6, 8, 6)           // footer, right: dates and bars
+    if not na(rsTbl)
+        table.merge_cells(rsTbl, 0, 0, 6, 0)           // title
+        table.merge_cells(rsTbl, 3, 1, 5, 1)           // TP1 over its three columns
+        table.merge_cells(rsTbl, 0, 1, 2, 1)           // TP2 over its three columns
+        table.merge_cells(rsTbl, 6, 1, 6, 2)           // grade over both header rows
 
 if barstate.islast
     f_drawPool(showLevels ? above : array.new<Liq>(), poolLnUp, poolLbUp)
@@ -842,9 +865,9 @@ if barstate.islast
         f_dashRow(dash, 6, "أقرب سيولة فوق", f_nearestText(above))
         f_dashRow(dash, 7, "أقرب سيولة تحت", f_nearestText(below))
         f_dashRow(dash, 8, "آخر إشارة", lastSig + f_status(lastT))
+    string t1Txt = targetMode == "$" ? str.tostring(tp1, "#.##") + "$" : str.tostring(tp1Atr, "#.##") + "×ATR"
+    string t2Txt = targetMode == "$" ? str.tostring(tp2, "#.##") + "$" : str.tostring(tp2Atr, "#.##") + "×ATR"
     if not na(stTbl)
-        string t1Txt = targetMode == "$" ? str.tostring(tp1, "#.##") + "$" : str.tostring(tp1Atr, "#.##") + "×ATR"
-        string t2Txt = targetMode == "$" ? str.tostring(tp2, "#.##") + "$" : str.tostring(tp2Atr, "#.##") + "×ATR"
         array<string> head = array.from("$/صفقة", "الصدفة", "ربح " + t2Txt, "$/صفقة", "الفرق", "الصدفة", "ربح " + t1Txt, "العدد", "التصنيف")
         table.cell(stTbl, 0, 0, "جدول الإحصاءات الحي", text_color = chart.fg_color, text_size = size.small, text_halign = text.align_right)
         for k = 0 to 8
@@ -855,3 +878,17 @@ if barstate.islast
         f_statRow(stTbl, 5, "AVOID", stAvoid)
         table.cell(stTbl, 0, 6, "الصدفة = نسبة رمي العملة · الفرق ≤ 0 يعني لا ميزة", text_color = C_MUTED, text_size = size.tiny, text_halign = text.align_left)
         table.cell(stTbl, 5, 6, f_date(winFrom) + " → " + f_date(winTo) + " · " + str.tostring(winBars) + " شمعة", text_color = C_MUTED, text_size = size.tiny, text_halign = text.align_right)
+    if not na(rsTbl)
+        table.cell(rsTbl, 0, 0, "نتائج الصفقات", text_color = chart.fg_color, text_size = size.small, text_halign = text.align_right)
+        table.cell(rsTbl, 6, 1, "التصنيف", text_color = C_MUTED, text_size = size.tiny, text_halign = text.align_right)
+        table.cell(rsTbl, 3, 1, "هدف " + t1Txt, text_color = C_MUTED, text_size = size.tiny, text_halign = text.align_center)
+        table.cell(rsTbl, 0, 1, "هدف " + t2Txt, text_color = C_MUTED, text_size = size.tiny, text_halign = text.align_center)
+        for g = 0 to 1
+            int k0 = 3 * g
+            table.cell(rsTbl, k0 + 2, 2, "✓ هدف", text_color = C_GOOD, text_size = size.tiny, text_halign = text.align_center)
+            table.cell(rsTbl, k0 + 1, 2, "✗ ستوب", text_color = C_BAD, text_size = size.tiny, text_halign = text.align_center)
+            table.cell(rsTbl, k0, 2, "⌛ وقت", text_color = C_MUTED, text_size = size.tiny, text_halign = text.align_center)
+        f_resRow(rsTbl, 3, "الكل", stAll)
+        f_resRow(rsTbl, 4, "A", stA)
+        f_resRow(rsTbl, 5, "B", stB)
+        f_resRow(rsTbl, 6, "AVOID", stAvoid)
