@@ -70,6 +70,7 @@ string statSize         = input.string("Small", "", options = ["Tiny", "Small", 
 string resPos           = input.string("Middle right", "Results table", options = ["Top left", "Top center", "Top right", "Middle left", "Middle center", "Middle right", "Bottom left", "Bottom center", "Bottom right"], group = GB, inline = "res", display = display.none)
 string resSize          = input.string("Small", "", options = ["Tiny", "Small", "Normal", "Large"], group = GB, inline = "res", display = display.none)
 float  labelGap         = input.float(2.0, "Min spacing of the labels on the right ($), 0 = off", minval = 0.0, step = 0.5, group = GD, display = display.none)
+int    drawChart        = input.int(12, "Chart-TF (15m) levels drawn per side, max", minval = 0, maxval = 100, group = GL, display = display.none)
 
 // ───── Constants ─────────────────────────────────────────────────────────────────────────
 bool   IS_DARK     = color.r(chart.bg_color) * 0.299 + color.g(chart.bg_color) * 0.587 + color.b(chart.bg_color) * 0.114 < 128
@@ -432,11 +433,14 @@ f_markSwept(array<Liq> lvs) =>
             line.set_color(x.ln, f_kindColor(top))
 
 // Nearest active levels on one side: one reused line per price, from the level's bar to the
-// current bar, with its label. Unused pool lines and labels are hidden.
+// current bar, with its label. A price held only by chart-TF swings counts towards drawChart;
+// past that many they are skipped, so the 1H / 4H / day / week / Asia levels behind them still
+// get a line. Unused pool lines and labels are hidden.
 f_drawPool(array<Liq> arr, array<line> lns, array<label> lbs) =>
-    int n = arr.size()
-    int g = 0
-    int i = 0
+    int n  = arr.size()
+    int g  = 0
+    int gP = 0
+    int i  = 0
     while i < n and g < lns.size()
         Liq first = arr.get(i)
         array<Liq> grp = array.new<Liq>()
@@ -447,16 +451,22 @@ f_drawPool(array<Liq> arr, array<line> lns, array<label> lbs) =>
                 break
             grp.push(arr.get(j))
             j += 1
-        color c = f_groupColor(grp)
-        line ln = lns.get(g)
-        ln.set_xy1(f_groupBorn(grp), first.price)
-        ln.set_xy2(time, first.price)
-        ln.set_color(c)
-        label lb = lbs.get(g)
-        lb.set_xy(bar_index, first.price)
-        lb.set_text(f_groupText(grp))
-        lb.set_textcolor(c)
-        g += 1
+        bool onlyP = true
+        for x in grp
+            if x.kind != "P"
+                onlyP := false
+        if not onlyP or gP < drawChart
+            color c = f_groupColor(grp)
+            line ln = lns.get(g)
+            ln.set_xy1(f_groupBorn(grp), first.price)
+            ln.set_xy2(time, first.price)
+            ln.set_color(c)
+            label lb = lbs.get(g)
+            lb.set_xy(bar_index, first.price)
+            lb.set_text(f_groupText(grp))
+            lb.set_textcolor(c)
+            g  += 1
+            gP += onlyP ? 1 : 0
         i := j
     while g < lns.size()
         lns.get(g).set_color(na)
