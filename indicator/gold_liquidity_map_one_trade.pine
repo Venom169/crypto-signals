@@ -5,11 +5,13 @@ indicator("Gold Liquidity Map", shorttitle = "GLM", overlay = true, max_lines_co
 // Gold Liquidity Map (GLM) - XAUUSD 15m.  Stage 5 of 6: levels, sweeps, grade, reading panel,
 // virtual trades, the live statistics table, the results table and alerts.
 // Separate copy, kept apart from stage 7 (gold_liquidity_map.pine) at the trader's request: the
-// version before stage 7 plus "One trade at a time" and the open-trades column.
+// version before stage 7 plus "One trade at a time", the open-trades column and results shown
+// as soon as price reaches a target or a stop.
 // Spec:  GOLD_LIQUIDITY_INDICATOR_SPEC.md  (2.1-2.7, 4.3-4.11)
 // Logic: research/sweep_engine.py is the reference; when in doubt, the code there decides.
-// No repaint: the engine runs on confirmed bars only, every higher-timeframe value comes from
-// an HTF bar that has already closed, and a signal is drawn on the bar whose close completes it.
+// No repaint: levels and signals come from confirmed bars only, every higher-timeframe value comes
+// from an HTF bar that has already closed, and a signal is drawn on the bar whose close completes
+// it. Open trades are also checked on the live bar, so the tables show a hit at once.
 // A chart-reading tool. It promises no profit; the live statistics table is the judge.
 // ═════════════════════════════════════════════════════════════════════════════════════════
 
@@ -786,7 +788,11 @@ bool chartLt1H = timeframe.in_seconds() < 3600     // as in the reference: 1H sw
 bool firedA    = false                              // this bar closed with an A signal (alertcondition)
 bool firedAB   = false                              // ... with an A or B signal
 
-// ───── Engine: one pass per confirmed bar, in the reference's order (spec 4.4) ───────────
+// ───── Engine, part 1: levels and sweeps, once per confirmed bar (spec 4.4) ──────────────
+// The engine keeps the reference's order. Steps 1-4 and 6-7 run once per confirmed bar; step 5,
+// the virtual trades, also runs on the live bar so the tables show a target or stop at once.
+Sig sigUp = na                                      // this bar's sweeps (steps 3-4), traded in step 6
+Sig sigDn = na
 if barstate.isconfirmed
     // 1. Levels available at this bar's open. Side check against the previous close.
     bool calAdded = false
@@ -834,8 +840,6 @@ if barstate.isconfirmed
 
     // 3. Candle sweeps (C) from breaks on earlier bars: this close is back inside the nearest
     //    level the break crossed, within candleBars bars. The extreme runs from the break bar to here.
-    Sig sigUp = na
-    Sig sigDn = na
     if pending.size() > 0
         for i = pending.size() - 1 to 0
             Pend p = pending.get(i)
@@ -862,34 +866,41 @@ if barstate.isconfirmed
     if not na(wDn)
         sigDn := f_addSig(sigDn, -1, "W", wDn.levels, wDn.ext, wDn.ref)
 
-    // 5. Virtual trades opened on earlier bars: one more bar for each target still open. This comes
-    //    before the bar's signal, so with oneTrade a trade that ends on this bar leaves the way free
-    //    for a signal at this close. A trade opened at this close is first checked on the next bar.
-    if openTr.size() > 0
-        for i = openTr.size() - 1 to 0
-            Trade tr = openTr.get(i)
-            if tr.barIdx < bar_index
-                int barsIn = bar_index - tr.barIdx
-                if tr.res1 == 0
-                    [r1, px1] = f_legStep(tr.dir, tr.sl, tr.tp1, barsIn)
-                    if r1 != 0
-                        tr.res1  := r1
-                        tr.exit1 := bar_index
-                        if tr.inStats
-                            f_addLeg(stAll, 1, r1, tr.coin1, tr.dir * (px1 - tr.entry) - cost)
-                            f_addLeg(f_statOf(tr.grade), 1, r1, tr.coin1, tr.dir * (px1 - tr.entry) - cost)
-                        f_drawMark(tr)
-                if tr.res2 == 0
-                    [r2, px2] = f_legStep(tr.dir, tr.sl, tr.tp2, barsIn)
-                    if r2 != 0
-                        tr.res2  := r2
-                        tr.exit2 := bar_index
-                        if tr.inStats
-                            f_addLeg(stAll, 2, r2, tr.coin2, tr.dir * (px2 - tr.entry) - cost)
-                            f_addLeg(f_statOf(tr.grade), 2, r2, tr.coin2, tr.dir * (px2 - tr.entry) - cost)
-                if tr.res1 != 0 and tr.res2 != 0
-                    openTr.remove(i)
+// ───── Engine, part 2: the virtual trades, on every update ───────────────────────────────
+// 5. Virtual trades opened on earlier bars: one more bar for each target still open. On history
+//    each bar runs once, at its close. On the live bar this also runs on every price update, so a
+//    target or stop shows in the tables the moment price reaches it; before each update Pine rolls
+//    the trades and totals back, and only what stands at the close is kept. A bar that reaches
+//    both still counts as the stop, so a target shown early turns into the stop if the same bar
+//    reaches it later. This runs before the bar's signal, so with oneTrade a trade that ends on
+//    this bar leaves the way free for a signal at this close.
+if openTr.size() > 0
+    for i = openTr.size() - 1 to 0
+        Trade tr = openTr.get(i)
+        if tr.barIdx < bar_index
+            int barsIn = bar_index - tr.barIdx
+            if tr.res1 == 0
+                [r1, px1] = f_legStep(tr.dir, tr.sl, tr.tp1, barsIn)
+                if r1 != 0
+                    tr.res1  := r1
+                    tr.exit1 := bar_index
+                    if tr.inStats
+                        f_addLeg(stAll, 1, r1, tr.coin1, tr.dir * (px1 - tr.entry) - cost)
+                        f_addLeg(f_statOf(tr.grade), 1, r1, tr.coin1, tr.dir * (px1 - tr.entry) - cost)
+                    f_drawMark(tr)
+            if tr.res2 == 0
+                [r2, px2] = f_legStep(tr.dir, tr.sl, tr.tp2, barsIn)
+                if r2 != 0
+                    tr.res2  := r2
+                    tr.exit2 := bar_index
+                    if tr.inStats
+                        f_addLeg(stAll, 2, r2, tr.coin2, tr.dir * (px2 - tr.entry) - cost)
+                        f_addLeg(f_statOf(tr.grade), 2, r2, tr.coin2, tr.dir * (px2 - tr.entry) - cost)
+            if tr.res1 != 0 and tr.res2 != 0
+                openTr.remove(i)
 
+// ───── Engine, part 3: the bar's signal, once per confirmed bar ──────────────────────────
+if barstate.isconfirmed
     // 6. One signal per bar, at this close. A bar that sweeps both sides is ambiguous: no signal,
     //    though its levels are still used up. Grade it, draw it, open its virtual trade (spec 2.4):
     //    entry at this close, stop stopBuf beyond the sweep extreme but never closer to the entry
