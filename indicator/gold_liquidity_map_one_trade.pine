@@ -1,0 +1,1028 @@
+//@version=6
+indicator("Gold Liquidity Map", shorttitle = "GLM", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// ═════════════════════════════════════════════════════════════════════════════════════════
+// Gold Liquidity Map (GLM) - XAUUSD 15m.  Stage 5 of 6: levels, sweeps, grade, reading panel,
+// virtual trades, the live statistics table, the results table and alerts.
+// Separate copy, kept apart from stage 7 (gold_liquidity_map.pine) at the trader's request: the
+// version before stage 7 plus "One trade at a time" and the open-trades column.
+// Spec:  GOLD_LIQUIDITY_INDICATOR_SPEC.md  (2.1-2.7, 4.3-4.11)
+// Logic: research/sweep_engine.py is the reference; when in doubt, the code there decides.
+// No repaint: the engine runs on confirmed bars only, every higher-timeframe value comes from
+// an HTF bar that has already closed, and a signal is drawn on the bar whose close completes it.
+// A chart-reading tool. It promises no profit; the live statistics table is the judge.
+// ═════════════════════════════════════════════════════════════════════════════════════════
+
+// ───── Inputs (spec 4.2) ─────────────────────────────────────────────────────────────────
+string GL = "Levels"
+string GS = "Sweep"
+string GP = "Plan"
+string GC = "Context"
+string GT = "Stats"
+string GD = "Display"
+string GA = "Alerts"
+string GB = "Tables"
+
+int    swingLen         = input.int(5, "Swing length, chart TF", minval = 1, group = GL)
+int    htfLen           = input.int(3, "Swing length, 1H and 4H", minval = 1, group = GL)
+bool   useP             = input.bool(true, "Chart-TF swings", group = GL, display = display.none)
+bool   useP1H           = input.bool(true, "1H swings", group = GL, display = display.none)
+bool   useP4H           = input.bool(true, "4H swings", group = GL, display = display.none)
+bool   usePD            = input.bool(true, "Previous day high / low", group = GL, display = display.none)
+bool   usePW            = input.bool(true, "Previous week high / low", group = GL, display = display.none)
+bool   useAsia          = input.bool(true, "Asia range", group = GL, display = display.none)
+string asiaSess         = input.session("0000-0600", "Asia session (UTC)", group = GL, display = display.none)
+int    maxLevelsPerSide = input.int(200, "Max stored levels per side", minval = 1, group = GL, display = display.none)
+int    drawNearest      = input.int(12, "Levels drawn per side (nearest)", minval = 0, maxval = 100, group = GL, display = display.none)
+int    candleBars       = input.int(2, "Candle-sweep window (bars)", minval = 1, group = GS, display = display.none)
+float  minPen           = input.float(0.0, "Min penetration to take a level ($)", minval = 0.0, step = 0.1, group = GS, display = display.none)
+bool   useW             = input.bool(true, "Wick sweeps (W)", group = GS, display = display.none)
+bool   useC             = input.bool(true, "Candle sweeps (C)", group = GS, display = display.none)
+float  stopBuf          = input.float(1.0, "Stop beyond the sweep extreme ($)", minval = 0.0, step = 0.1, group = GP)
+string targetMode       = input.string("$", "Target unit", options = ["$", "ATR"], group = GP, display = display.none)
+float  tp1              = input.float(15.0, "TP1 ($)", minval = 0.01, group = GP)
+float  tp2              = input.float(20.0, "TP2 ($)", minval = 0.01, group = GP)
+float  tp1Atr           = input.float(2.0, "TP1 (x ATR)", minval = 0.01, step = 0.1, group = GP, display = display.none)
+float  tp2Atr           = input.float(2.7, "TP2 (x ATR)", minval = 0.01, step = 0.1, group = GP, display = display.none)
+int    timeStop         = input.int(32, "Time stop (bars)", minval = 1, group = GP, display = display.none)
+float  cost             = input.float(0.5, "Cost per trade in the stats ($)", minval = 0.0, step = 0.1, group = GP, display = display.none)
+string trendTF          = input.timeframe("60", "Trend timeframe", group = GC, display = display.none)
+int    trendLen         = input.int(50, "Trend EMA length", minval = 1, group = GC, display = display.none)
+float  roundStep        = input.float(50.0, "Round number step ($)", minval = 0.01, group = GC, display = display.none)
+float  roundTol         = input.float(3.0, "Round number tolerance ($)", minval = 0.0, group = GC, display = display.none)
+bool   avoidAsia        = input.bool(true, "AVOID: Asia session", group = GC, display = display.none)
+bool   avoidRound       = input.bool(true, "AVOID: near a round number", group = GC, display = display.none)
+bool   avoidCounter     = input.bool(true, "AVOID: against the trend", group = GC, display = display.none)
+int    statsFrom        = input.time(timestamp("01 Jan 2000 00:00 +0000"), "Stats from", group = GT, display = display.none)
+int    statsTo          = input.time(timestamp("01 Jan 2100 00:00 +0000"), "Stats to", group = GT, display = display.none)
+bool   showLevels       = input.bool(true, "Show levels", group = GD, display = display.none)
+bool   showSignals      = input.bool(true, "Show signals", group = GD, display = display.none)
+bool   showPlan         = input.bool(true, "Show trade plan (latest signal)", group = GD, display = display.none)
+// The three table switches stay at their place in the list (saved values), but show in the
+// Tables section, each on one line with its table's position and size (same inline id).
+bool   showStats        = input.bool(true, "Statistics table", group = GB, inline = "stat", display = display.none)
+bool   showResults      = input.bool(true, "Results table", group = GB, inline = "res", display = display.none)
+bool   showDash         = input.bool(true, "Reading panel", group = GB, inline = "dash", display = display.none)
+bool   showAvoid        = input.bool(true, "Show AVOID signals (grey)", group = GD, display = display.none)
+string alertMin         = input.string("A", "Alert from grade", options = ["A", "B", "ALL"], group = GA, display = display.none)
+// Declared last so the saved values of the inputs above keep their place on the chart.
+float  minStop          = input.float(0.0, "Minimum stop ($), 0 = off", minval = 0.0, step = 0.5, group = GP, display = display.none)
+string dashPos          = input.string("Top right", "", options = ["Top left", "Top center", "Top right", "Middle left", "Middle center", "Middle right", "Bottom left", "Bottom center", "Bottom right"], group = GB, inline = "dash", display = display.none)
+string dashSize         = input.string("Small", "", options = ["Tiny", "Small", "Normal", "Large"], group = GB, inline = "dash", display = display.none)
+string statPos          = input.string("Bottom right", "", options = ["Top left", "Top center", "Top right", "Middle left", "Middle center", "Middle right", "Bottom left", "Bottom center", "Bottom right"], group = GB, inline = "stat", display = display.none)
+string statSize         = input.string("Small", "", options = ["Tiny", "Small", "Normal", "Large"], group = GB, inline = "stat", display = display.none)
+string resPos           = input.string("Middle right", "", options = ["Top left", "Top center", "Top right", "Middle left", "Middle center", "Middle right", "Bottom left", "Bottom center", "Bottom right"], group = GB, inline = "res", display = display.none)
+string resSize          = input.string("Small", "", options = ["Tiny", "Small", "Normal", "Large"], group = GB, inline = "res", display = display.none)
+float  labelGap         = input.float(2.0, "Min spacing of the labels on the right ($), 0 = off", minval = 0.0, step = 0.5, group = GD, display = display.none)
+int    drawChart        = input.int(12, "Chart-TF (15m) levels drawn per side, max", minval = 0, maxval = 100, group = GL, display = display.none)
+bool   oneTrade         = input.bool(false, "One trade at a time", group = GP, display = display.none, tooltip = "While a virtual trade is open, new signals are drawn grey and are not traded, counted or alerted. Hidden AVOID signals are not traded either.")
+
+// ───── Constants ─────────────────────────────────────────────────────────────────────────
+bool   IS_DARK     = color.r(chart.bg_color) * 0.299 + color.g(chart.bg_color) * 0.587 + color.b(chart.bg_color) * 0.114 < 128
+color  C_CHART     = IS_DARK ? #3987e5 : #2a78d6   // chart-TF swings (dark-chart steps: spec 4.4, picture 07)
+color  C_HTF       = IS_DARK ? #d95926 : #eb6834   // 1H / 4H swings
+color  C_CAL       = IS_DARK ? #199e70 : #1baf7a   // previous day / week, Asia range
+color  C_GOOD      = #0ca30c                       // green is for results only: TP lines and ✓ (spec 4.7)
+color  C_BAD       = #d03b3b                       // red is for results only: SL line and ✗
+color  C_UP        = #26a69a                       // reading-panel trend arrows, as in picture 07
+color  C_DOWN      = #ef5350
+color  C_MUTED     = color.new(chart.fg_color, 50) // AVOID markers, ⌛, secondary text
+int    TR_TAKEN    = 55        // transparency of a line whose level was taken without a sweep
+int    TR_ENDED    = 40        // transparency of a day / week / Asia line that expired untouched
+int    MAX_LINES   = 500       // = max_lines_count  } the reused pool and plan objects are counted first and
+int    MAX_LABELS  = 500       // = max_labels_count } the rest is trimmed below the cap, so TradingView never
+int    PLAN_LINES  = 4         //                      auto-deletes them
+int    PLAN_LABELS = 4
+int    ATR_LEN     = 14        // ATR(14) on the chart TF (spec 2.6)
+int    NY_ASIA     = 18        // sessions by the New York hour of the bar's open (spec 2.6):
+int    NY_LONDON   = 2         //   Asia 18-02, London 02-08, NY morning 08-12, NY afternoon 12-17
+int    NY_AM       = 8
+int    NY_PM       = 12
+int    EMA_1H      = 50        // reading-panel trends (spec 4.9): EMA50 1H, EMA50 4H, EMA20 daily
+int    EMA_4H      = 50
+int    EMA_D       = 20
+float  DIFF_GOOD   = 5.0       // stats table: the difference turns green above +5 points
+int    N_GOOD      = 50        //   and with at least 50 trades (spec 4.8)
+string TF_TXT      = timeframe.isseconds ? str.tostring(timeframe.multiplier) + "s" : timeframe.isminutes ? str.tostring(timeframe.multiplier) + "m" : timeframe.period
+
+// ───── Types (spec 4.4) ──────────────────────────────────────────────────────────────────
+type Liq
+    float  price
+    int    side      // 1 = above price (tops), -1 = below price (bottoms)
+    string kind      // "P", "P1H", "P4H", "PD", "PW", "ASIA"
+    int    born      // time of the bar that made the level, for drawing
+    int    expiry    // na = never expires
+    line   ln        // the level's own line once it has ended (taken or expired)
+
+// A break waiting for a close back inside: a candle sweep in the making (spec 2.3, C).
+type Pend
+    int        side      // 1 = tops, -1 = bottoms
+    float      ref       // nearest level the break bar crossed
+    float      ext       // sweep extreme so far
+    int        barIdx    // bar_index of the break
+    array<Liq> levels    // the levels the break bar crossed
+
+// The sweep found on one side of one bar.
+type Sig
+    int        side      // 1 = tops swept (sell), -1 = bottoms swept (buy)
+    string     typ       // "W", "C" or "W+C"
+    float      ext       // sweep extreme: the farthest point beyond the levels
+    float      ref       // nearest swept level
+    array<Liq> levels    // every level swept
+    string     grade     // "A", "B" or "AVOID" (spec 2.7)
+    string     sess      // "asia", "london", "ny_am", "ny_pm"
+    int        trend     // 1 = with the trend, -1 = against it, 0 = no trend value yet
+    float      roundHit  // the round number a swept level sits near, or na
+
+// The virtual trade of one signal, measured once per target (spec 2.4).
+type Trade
+    int    dir           // 1 = buy, -1 = sell
+    string grade
+    int    barIdx        // signal bar: entry at its close, checks start on the next bar
+    float  entry
+    float  sl
+    float  tp1
+    float  tp2
+    float  coin1         // S / (S + T): what a coin flip wins with this stop and target
+    float  coin2
+    bool   inStats       // signal inside statsFrom..statsTo
+    label  lb            // the signal's marker, if drawn
+    int    res1 = 0      // per target: 0 open, 1 target, -1 stop, 2 time stop
+    int    res2 = 0
+    int    exit1         // bar_index where each target's trade closed
+    int    exit2
+
+// Totals of closed virtual trades for one row of the statistics and results tables.
+// Per target: closed (n) = target (w) + stop (sl) + time stop (ts).
+type Stat
+    int   n1 = 0
+    int   w1 = 0
+    int   sl1 = 0
+    int   ts1 = 0
+    float c1 = 0.0
+    float p1 = 0.0
+    int   n2 = 0
+    int   w2 = 0
+    int   sl2 = 0
+    int   ts2 = 0
+    float c2 = 0.0
+    float p2 = 0.0
+
+// ───── State ─────────────────────────────────────────────────────────────────────────────
+var array<Liq>   above    = array.new<Liq>()     // nearest first: ascending price
+var array<Liq>   below    = array.new<Liq>()     // nearest first: descending price
+var array<line>  histLn   = array.new<line>()    // lines of ended levels, oldest first
+var array<line>  poolLnUp = array.new<line>()    // reused lines for the nearest active levels
+var array<line>  poolLnDn = array.new<line>()
+var array<label> poolLbUp = array.new<label>()
+var array<label> poolLbDn = array.new<label>()
+var array<Pend>  pending  = array.new<Pend>()    // candle sweeps in the making
+var array<label> sigLb    = array.new<label>()   // signal markers, oldest first
+var array<label> markLb   = array.new<label>()   // ✓ ✗ ⌛ marks, oldest first
+var array<Trade> openTr   = array.new<Trade>()   // virtual trades still running
+var array<line>  planLn   = array.new<line>()    // plan: entry, stop, TP1, TP2
+var array<label> planLb   = array.new<label>()
+var array<box>   planBx   = array.new<box>()     // plan: risk and reward shading
+var Stat         stAll    = Stat.new()
+var Stat         stA      = Stat.new()
+var Stat         stB      = Stat.new()
+var Stat         stAvoid  = Stat.new()
+var Trade        planT    = na                   // the trade drawn as the plan: the latest shown signal
+var Trade        lastT    = na                   // the latest signal's trade, for the reading panel
+var string       lastSig  = "—"                  // reading panel: the last signal
+var int          nextExp  = na                   // earliest expiry among stored levels
+var float        asiaHi   = na                   // Asia range, tracked on chart bars
+var float        asiaLo   = na
+var int          asiaT    = na
+var int          winFrom  = na                   // the part of statsFrom..statsTo the chart covers
+var int          winTo    = na
+var int          winBars  = 0
+
+// ───── Helpers ───────────────────────────────────────────────────────────────────────────
+// How "big" a kind is: picks the colour of a shared line and the order of names in its label.
+f_rank(string k) =>
+    switch k
+        "P"    => 1
+        "ASIA" => 2
+        "P1H"  => 3
+        "PD"   => 4
+        "P4H"  => 5
+        "PW"   => 6
+        => 0
+
+f_kindColor(string k) =>
+    k == "P" ? C_CHART : k == "P1H" or k == "P4H" ? C_HTF : C_CAL
+
+f_kindText(string k, int side) =>
+    switch k
+        "P"   => TF_TXT
+        "P1H" => "1H"
+        "P4H" => "4H"
+        "PD"  => side == 1 ? "PDH" : "PDL"
+        "PW"  => side == 1 ? "PWH" : "PWL"
+        => side == 1 ? "ASIA H" : "ASIA L"
+
+f_samePx(float a, float b) =>
+    math.round_to_mintick(a) == math.round_to_mintick(b)
+
+// A group = levels on one side at one price. It is drawn as one line in the colour of its biggest kind.
+f_groupColor(array<Liq> grp) =>
+    string top = grp.first().kind
+    for x in grp
+        if f_rank(x.kind) > f_rank(top)
+            top := x.kind
+    f_kindColor(top)
+
+f_groupBorn(array<Liq> grp) =>
+    int b = grp.first().born
+    for x in grp
+        b := math.min(b, x.born)
+    b
+
+// Names of the kinds in rank order, each once, e.g. "15m + 1H + PDH" (the alert uses "15m+1H+PDH")
+f_kindsText(array<Liq> lvs, string sep = " + ") =>
+    string txt = ""
+    for r = 1 to 6
+        for x in lvs
+            if f_rank(x.kind) == r
+                txt += (txt == "" ? "" : sep) + f_kindText(x.kind, x.side)
+                break
+    txt
+
+// Label of a level line, e.g. "15m + 1H + PDH  4193.1"
+f_groupText(array<Liq> grp) =>
+    f_kindsText(grp) + "  " + str.tostring(grp.first().price, "#.0")
+
+// "60" -> "1H", "15" -> "15m", "D" -> "D"
+f_tfText(string tf) =>
+    int sec = timeframe.in_seconds(tf)
+    sec >= 86400 ? tf : sec >= 3600 ? str.tostring(sec / 3600, "#") + "H" : str.tostring(sec / 60, "#") + "m"
+
+f_pct(float x) =>
+    na(x) ? "—" : str.tostring(x, "0.0") + "%"
+
+f_sgn(float x, string fmt) =>
+    na(x) ? "—" : (x >= 0 ? "+" : "") + str.tostring(x, fmt)
+
+f_date(int t) =>
+    na(t) ? "—" : str.format_time(t, "yyyy-MM-dd", "UTC")
+
+// Net total in $ after costs, e.g. "+104.0$"; "—" while no trade has closed.
+f_usd(float p, int n) =>
+    n == 0 ? "—" : (p >= 0 ? "+" : "") + str.tostring(p, "0.0") + "$"
+
+// Table position and text size from the inputs. Headers and footers are one size smaller.
+f_pos(string p) =>
+    switch p
+        "Top left"      => position.top_left
+        "Top center"    => position.top_center
+        "Top right"     => position.top_right
+        "Middle left"   => position.middle_left
+        "Middle center" => position.middle_center
+        "Middle right"  => position.middle_right
+        "Bottom left"   => position.bottom_left
+        "Bottom center" => position.bottom_center
+        => position.bottom_right
+
+f_size(string s) =>
+    switch s
+        "Tiny"   => size.tiny
+        "Small"  => size.small
+        "Normal" => size.normal
+        => size.large
+
+f_sizeDown(string s) =>
+    switch s
+        "Large"  => size.normal
+        "Normal" => size.small
+        => size.tiny
+
+string SZ_DASH  = f_size(dashSize)
+string SZ_STAT  = f_size(statSize)
+string SZ_STATH = f_sizeDown(statSize)
+string SZ_RES   = f_size(resSize)
+string SZ_RESH  = f_sizeDown(resSize)
+
+// ───── Context (spec 2.6, 4.6) ───────────────────────────────────────────────────────────
+// Session by the New York hour of the bar's open.
+f_session(int t) =>
+    int h = hour(t, "America/New_York")
+    h >= NY_ASIA or h < NY_LONDON ? "asia" : h < NY_AM ? "london" : h < NY_PM ? "ny_am" : "ny_pm"
+
+f_sessionEn(string s) =>
+    s == "asia" ? "Asia" : s == "london" ? "London" : s == "ny_am" ? "NY morning" : "NY afternoon"
+
+f_sessionAr(string s) =>
+    s == "asia" ? "آسيا" : s == "london" ? "لندن" : s == "ny_am" ? "صباح نيويورك" : "بعد ظهر نيويورك"
+
+// The round number (multiple of roundStep) that a swept level sits within roundTol of, or na.
+f_roundNear(array<Liq> lvs) =>
+    float hit = na
+    for x in lvs
+        float r = math.round(x.price / roundStep) * roundStep
+        if math.abs(x.price - r) <= roundTol
+            hit := r
+            break
+    hit
+
+// Grade (spec 2.7). Trend = this close against the trend EMA of closed trendTF bars; as in the
+// reference, no EMA value yet counts as neither with nor against.
+f_grade(Sig s, float ema) =>
+    int tDir    = na(ema) ? 0 : close > ema ? 1 : close < ema ? -1 : 0
+    s.sess     := f_session(time)
+    s.trend    := -s.side * tDir                    // sweeping tops is a sell: trade direction = -side
+    s.roundHit := f_roundNear(s.levels)
+    bool avoid  = (avoidAsia and s.sess == "asia") or (avoidRound and not na(s.roundHit)) or (avoidCounter and s.trend == -1)
+    s.grade    := avoid ? "AVOID" : s.trend == 1 and (s.sess == "london" or s.sess == "ny_am") ? "A" : "B"
+    s.grade
+
+// ───── Level engine ──────────────────────────────────────────────────────────────────────
+// Insert keeping the side sorted nearest-first. Beyond maxLevelsPerSide the oldest level is dropped.
+f_addLevel(Liq lv) =>
+    array<Liq> arr = lv.side == 1 ? above : below
+    int pos = arr.size()
+    for [i, x] in arr
+        if (lv.side == 1 ? x.price > lv.price : x.price < lv.price)
+            pos := i
+            break
+    arr.insert(pos, lv)
+    if arr.size() > maxLevelsPerSide
+        int old = 0
+        for [i, x] in arr
+            if x.born < arr.get(old).born
+                old := i
+        arr.remove(old)
+
+// Step 2: levels whose life ended before this bar opened (expiry <= time).
+f_expire(array<Liq> arr, array<Liq> out) =>
+    int n = arr.size()
+    if n > 0
+        for i = n - 1 to 0
+            Liq x = arr.get(i)
+            if not na(x.expiry) and x.expiry <= time
+                out.push(arr.remove(i))
+
+f_minExpiry() =>
+    int m = na
+    for x in above
+        if not na(x.expiry)
+            m := na(m) ? x.expiry : math.min(m, x.expiry)
+    for x in below
+        if not na(x.expiry)
+            m := na(m) ? x.expiry : math.min(m, x.expiry)
+    m
+
+// Step 4 (spec 2.2): levels this bar trades beyond. Always a prefix of the nearest-first array.
+// A level is used up the first time price trades beyond it: sweep or break, gap or not.
+f_take(array<Liq> arr, array<Liq> out) =>
+    while arr.size() > 0
+        Liq x = arr.first()
+        if (x.side == 1 ? high <= x.price + minPen : low >= x.price - minPen)
+            break
+        out.push(arr.shift())
+
+// ───── Drawing budgets ───────────────────────────────────────────────────────────────────
+f_keepHist(line ln) =>
+    histLn.push(ln)
+    while histLn.size() > math.max(MAX_LINES - 2 * drawNearest - PLAN_LINES, 0)
+        line.delete(histLn.shift())
+
+// Signal markers come before the ✓ ✗ ⌛ marks: when labels run short, the oldest marks go first,
+// so every recent signal keeps its marker.
+f_trimLabels() =>
+    while sigLb.size() + markLb.size() > math.max(MAX_LABELS - 2 * drawNearest - PLAN_LABELS, 0)
+        if markLb.size() > 0
+            label.delete(markLb.shift())
+        else
+            label.delete(sigLb.shift())
+
+// ───── Level lines ───────────────────────────────────────────────────────────────────────
+// Levels that just ended: one line per price, from the level's bar to x2 (spec 4.4).
+// mode 0 = expired untouched (solid), 1 = taken without a sweep (solid, faded), 2 = swept (dotted).
+f_drawEnded(array<Liq> ended, int x2, int mode) =>
+    int n = ended.size()
+    if showLevels and n > 0
+        array<float> px = array.new<float>()
+        for x in ended
+            px.push(x.price)
+        array<int> ord = px.sort_indices(order.ascending)
+        int i = 0
+        while i < n
+            Liq first = ended.get(ord.get(i))
+            array<Liq> grp = array.new<Liq>()
+            grp.push(first)
+            int j = i + 1
+            while j < n
+                Liq nx = ended.get(ord.get(j))
+                if nx.side != first.side or not f_samePx(nx.price, first.price)
+                    break
+                grp.push(nx)
+                j += 1
+            color col = f_groupColor(grp)
+            line ln = line.new(f_groupBorn(grp), first.price, x2, first.price, xloc = xloc.bar_time, color = mode == 2 ? col : color.new(col, mode == 1 ? TR_TAKEN : TR_ENDED), style = mode == 2 ? line.style_dotted : line.style_solid, width = 1)
+            f_keepHist(ln)
+            for k = 0 to grp.size() - 1
+                Liq y = grp.get(k)
+                y.ln := ln
+            i := j
+
+// A break that became a candle sweep: its lines turn dotted, in the colour of their biggest kind.
+f_markSwept(array<Liq> lvs) =>
+    for x in lvs
+        if not na(x.ln)
+            string top = x.kind
+            for y in lvs
+                if y.side == x.side and f_samePx(y.price, x.price) and f_rank(y.kind) > f_rank(top)
+                    top := y.kind
+            line.set_style(x.ln, line.style_dotted)
+            line.set_color(x.ln, f_kindColor(top))
+
+// Nearest active levels on one side: one reused line per price, from the level's bar to the
+// current bar, with its label. A price held only by chart-TF swings counts towards drawChart;
+// past that many they are skipped, so the 1H / 4H / day / week / Asia levels behind them still
+// get a line. Unused pool lines and labels are hidden.
+f_drawPool(array<Liq> arr, array<line> lns, array<label> lbs) =>
+    int n  = arr.size()
+    int g  = 0
+    int gP = 0
+    int i  = 0
+    while i < n and g < lns.size()
+        Liq first = arr.get(i)
+        array<Liq> grp = array.new<Liq>()
+        grp.push(first)
+        int j = i + 1
+        while j < n
+            if not f_samePx(arr.get(j).price, first.price)
+                break
+            grp.push(arr.get(j))
+            j += 1
+        bool onlyP = true
+        for x in grp
+            if x.kind != "P"
+                onlyP := false
+        if not onlyP or gP < drawChart
+            color c = f_groupColor(grp)
+            line ln = lns.get(g)
+            ln.set_xy1(f_groupBorn(grp), first.price)
+            ln.set_xy2(time, first.price)
+            ln.set_color(c)
+            label lb = lbs.get(g)
+            lb.set_xy(bar_index, first.price)
+            lb.set_text(f_groupText(grp))
+            lb.set_textcolor(c)
+            g  += 1
+            gP += onlyP ? 1 : 0
+        i := j
+    while g < lns.size()
+        lns.get(g).set_color(na)
+        lbs.get(g).set_text("")
+        g += 1
+
+// ───── Signals and marks ─────────────────────────────────────────────────────────────────
+// Marker on the bar whose close completes the sweep (spec 4.7): ▼ over swept tops (sell),
+// ▲ under swept bottoms (buy), with "type · grade" as text. A and B in the chart's text colour,
+// AVOID in grey, and in grey too a signal left untraded because a trade was open (oneTrade).
+// The tooltip holds what was swept, the trade plan, the coin flip and the context.
+// Returns the label or na.
+f_drawSignal(Sig s, Trade t, bool taken) =>
+    label lb = na
+    bool avoid = s.grade == "AVOID"
+    if showSignals and (showAvoid or not avoid)
+        bool   top = s.side == 1
+        string tag = s.typ + " · " + s.grade
+        string tt  = (top ? "SELL" : "BUY") + " · " + tag
+        tt += "\nswept " + f_kindsText(s.levels) + " @ " + str.tostring(s.ref, "#.00")
+        tt += "\nsweep extreme " + str.tostring(s.ext, "#.00")
+        tt += "\nentry " + str.tostring(t.entry, "#.00")
+        tt += "\nSL " + str.tostring(t.sl, "#.00") + " ($" + str.tostring(math.abs(t.entry - t.sl), "0.00") + ")"
+        tt += "\nTP1 " + str.tostring(t.tp1, "#.00") + " · TP2 " + str.tostring(t.tp2, "#.00")
+        tt += "\ncoin flip " + str.tostring(100 * t.coin1, "0") + "% / " + str.tostring(100 * t.coin2, "0") + "%"
+        tt += "\n" + f_sessionEn(s.sess) + " · " + f_tfText(trendTF) + " trend: " + (s.trend == 1 ? "with" : s.trend == -1 ? "against" : "n/a")
+        if not na(s.roundHit)
+            tt += " · near " + str.tostring(s.roundHit, "#")
+        if not taken
+            tt += "\nnot traded: a trade was open"
+        color col = avoid or not taken ? C_MUTED : chart.fg_color
+        lb := label.new(bar_index, close, top ? tag + "\n▼" : "▲\n" + tag, yloc = top ? yloc.abovebar : yloc.belowbar, color = na, style = top ? label.style_label_down : label.style_label_up, textcolor = col, size = size.small, tooltip = tt)
+        sigLb.push(lb)
+        f_trimLabels()
+    lb
+
+// TP1 result beside the signal's marker (spec 4.7, picture 07): ✓ target, ✗ stop, ⌛ time stop.
+// Its text has one line more than the marker, so it stacks just beyond it.
+f_drawMark(Trade t) =>
+    if not na(t.lb)
+        bool   top = t.dir == -1
+        string m   = t.res1 == 1 ? "✓" : t.res1 == -1 ? "✗" : "⌛"
+        color  mc  = t.res1 == 1 ? C_GOOD : t.res1 == -1 ? C_BAD : C_MUTED
+        markLb.push(label.new(t.barIdx, close, top ? m + "\n\n" : "\n\n" + m, yloc = top ? yloc.abovebar : yloc.belowbar, color = na, style = top ? label.style_label_down : label.style_label_up, textcolor = mc, size = size.small))
+        f_trimLabels()
+
+// ───── Sweep detection (spec 2.3, 4.5) ───────────────────────────────────────────────────
+// Step 4 for one side: the levels this bar crossed after opening on the near side of them.
+// Close back inside all of them = wick sweep (W); close beyond = a break that may become C.
+// Levels the bar opened beyond (a gap) are used up without a sweep.
+f_takeSide(array<Liq> taken, int side) =>
+    Sig w = na
+    if taken.size() > 0
+        array<Liq> crossed = array.new<Liq>()
+        array<Liq> gapped  = array.new<Liq>()
+        for x in taken
+            if (side == 1 ? open <= x.price : open >= x.price)
+                crossed.push(x)
+            else
+                gapped.push(x)
+        f_drawEnded(gapped, time, 1)
+        if crossed.size() > 0
+            float ref = crossed.first().price     // nearest crossed level
+            float ext = side == 1 ? high : low
+            if (side == 1 ? close < ref : close > ref)
+                f_drawEnded(crossed, time, 2)
+                if useW
+                    w := Sig.new(side, "W", ext, ref, crossed)
+            else
+                f_drawEnded(crossed, time, 1)
+                pending.push(Pend.new(side, ref, ext, bar_index, crossed))
+    w
+
+// One signal per side per bar: W with C gives "W+C"; the extreme is the farthest point,
+// the reference the nearest level.
+f_addSig(Sig cur, int side, string typ, array<Liq> lvs, float ext, float ref) =>
+    Sig s = cur
+    if na(s)
+        s := Sig.new(side, typ, ext, ref, lvs.copy())
+    else
+        s.typ := s.typ != typ ? "W+C" : typ
+        s.ext := side == 1 ? math.max(s.ext, ext) : math.min(s.ext, ext)
+        s.ref := side == 1 ? math.min(s.ref, ref) : math.max(s.ref, ref)
+        s.levels.concat(lvs)
+    s
+
+// ───── Virtual trades (spec 2.4, 4.8) ────────────────────────────────────────────────────
+// One bar of one target's trade: a gap through the stop or target fills at the open; stop and
+// target in the same bar count as the stop; at the time stop the trade exits at this close.
+// Returns [result, exit price]; result 0 = still open.
+f_legStep(int d, float sl, float tp, int barsIn) =>
+    int   res = 0
+    float px  = na
+    if (d == 1 ? open <= sl : open >= sl)
+        res := -1
+        px  := open
+    else if (d == 1 ? open >= tp : open <= tp)
+        res := 1
+        px  := open
+    else if (d == 1 ? low <= sl : high >= sl)
+        res := -1
+        px  := sl
+    else if (d == 1 ? high >= tp : low <= tp)
+        res := 1
+        px  := tp
+    else if barsIn >= timeStop
+        res := 2
+        px  := close
+    [res, px]
+
+f_statOf(string g) =>
+    g == "A" ? stA : g == "B" ? stB : stAvoid
+
+f_addLeg(Stat st, int leg, int res, float coin, float pnl) =>
+    if leg == 1
+        st.n1 := st.n1 + 1
+        st.w1 := st.w1 + (res == 1 ? 1 : 0)
+        st.sl1 := st.sl1 + (res == -1 ? 1 : 0)
+        st.ts1 := st.ts1 + (res == 2 ? 1 : 0)
+        st.c1 := st.c1 + coin
+        st.p1 := st.p1 + pnl
+    else
+        st.n2 := st.n2 + 1
+        st.w2 := st.w2 + (res == 1 ? 1 : 0)
+        st.sl2 := st.sl2 + (res == -1 ? 1 : 0)
+        st.ts2 := st.ts2 + (res == 2 ? 1 : 0)
+        st.c2 := st.c2 + coin
+        st.p2 := st.p2 + pnl
+
+// ───── Alerts (spec 4.10) ────────────────────────────────────────────────────────────────
+// alertMin "A" = A only, "B" = A and B, "ALL" = every grade.
+f_alertOk(string g) =>
+    alertMin == "ALL" or g == "A" or (alertMin == "B" and g == "B")
+
+// XAUUSD 15m | SELL | A | swept 1H+PDH @ 4123.40 | entry 4120.10 | SL 4126.00 ($5.90) | TP1 4105.10 | TP2 4100.10 | coin-flip 28%/23%
+f_alertText(Sig s, Trade t) =>
+    string m = syminfo.ticker + " " + TF_TXT + " | " + (t.dir == 1 ? "BUY" : "SELL") + " | " + s.grade
+    m += " | swept " + f_kindsText(s.levels, "+") + " @ " + str.tostring(s.ref, "#.00")
+    m += " | entry " + str.tostring(t.entry, "#.00")
+    m += " | SL " + str.tostring(t.sl, "#.00") + " ($" + str.tostring(math.abs(t.entry - t.sl), "0.00") + ")"
+    m += " | TP1 " + str.tostring(t.tp1, "#.00") + " | TP2 " + str.tostring(t.tp2, "#.00")
+    m += " | coin-flip " + str.tostring(100 * t.coin1, "0") + "%/" + str.tostring(100 * t.coin2, "0") + "%"
+    m
+
+// ───── Plan, panel and table ─────────────────────────────────────────────────────────────
+f_planItem(line ln, label lb, int x1, int x2, float y, color c, int w, string txt) =>
+    ln.set_xy1(x1, y)
+    ln.set_xy2(x2, y)
+    ln.set_color(c)
+    ln.set_width(w)
+    lb.set_xy(x2, y)
+    lb.set_text(txt)
+    lb.set_textcolor(chart.fg_color)
+
+// The latest shown signal's virtual trade (spec 4.7, picture 07): entry, stop and both targets
+// from the signal bar until each closes (to the current bar while open), risk and reward shaded.
+f_drawPlan(Trade t) =>
+    if planLn.size() == PLAN_LINES
+        if not na(t)
+            int xEnd = t.res1 != 0 and t.res2 != 0 ? math.max(t.exit1, t.exit2) : bar_index
+            int x1   = t.res1 != 0 ? t.exit1 : bar_index
+            int x2   = t.res2 != 0 ? t.exit2 : bar_index
+            f_planItem(planLn.get(0), planLb.get(0), t.barIdx, xEnd, t.entry, chart.fg_color, 1, "Entry " + str.tostring(t.entry, "#.0"))
+            f_planItem(planLn.get(1), planLb.get(1), t.barIdx, xEnd, t.sl, C_BAD, 2, "SL " + str.tostring(t.sl, "#.0") + "  (-$" + str.tostring(math.abs(t.entry - t.sl), "0.0") + ")")
+            f_planItem(planLn.get(2), planLb.get(2), t.barIdx, x1, t.tp1, C_GOOD, 1, "TP1 " + str.tostring(t.tp1, "#.0") + "  (+$" + str.tostring(math.abs(t.tp1 - t.entry), "#.#") + ")")
+            f_planItem(planLn.get(3), planLb.get(3), t.barIdx, x2, t.tp2, C_GOOD, 2, "TP2 " + str.tostring(t.tp2, "#.0") + "  (+$" + str.tostring(math.abs(t.tp2 - t.entry), "#.#") + ")")
+            box.set_lefttop(planBx.get(0), t.barIdx, math.max(t.entry, t.sl))
+            box.set_rightbottom(planBx.get(0), xEnd, math.min(t.entry, t.sl))
+            box.set_bgcolor(planBx.get(0), color.new(C_BAD, 84))
+            box.set_lefttop(planBx.get(1), t.barIdx, math.max(t.entry, t.tp2))
+            box.set_rightbottom(planBx.get(1), xEnd, math.min(t.entry, t.tp2))
+            box.set_bgcolor(planBx.get(1), color.new(C_GOOD, 88))
+
+// Labels on the right of the last bar: the nearest levels and, while the plan is open, its labels.
+// Where they would overlap they are pushed apart vertically to at least labelGap, each cluster
+// centred on its own prices. Display only: the lines stay put and each text keeps its exact price.
+f_spreadLabels() =>
+    array<label> lbs = array.new<label>()
+    array<float> ys  = array.new<float>()
+    for lb in poolLbUp
+        if lb.get_text() != ""
+            lbs.push(lb)
+            ys.push(lb.get_y())
+    for lb in poolLbDn
+        if lb.get_text() != ""
+            lbs.push(lb)
+            ys.push(lb.get_y())
+    for lb in planLb
+        if lb.get_text() != "" and lb.get_x() == bar_index
+            lbs.push(lb)
+            ys.push(lb.get_y())
+    int n = lbs.size()
+    if labelGap > 0 and n > 1
+        array<int>   ord = ys.sort_indices(order.descending)
+        array<int>   cs  = array.new<int>()      // each cluster's first label, in price order
+        array<int>   cn  = array.new<int>()      // labels in each cluster
+        array<float> ct  = array.new<float>()    // y of each cluster's top label
+        for i = 0 to n - 1
+            cs.push(i)
+            cn.push(1)
+            ct.push(ys.get(ord.get(i)))
+            while cs.size() > 1
+                int   m      = cs.size() - 1
+                float bottom = ct.get(m - 1) - (cn.get(m - 1) - 1) * labelGap
+                if bottom - ct.get(m) >= labelGap
+                    break
+                int k = cn.get(m - 1) + cn.get(m)
+                cs.pop()
+                cn.pop()
+                ct.pop()
+                cn.set(m - 1, k)
+                float sum = 0.0
+                for j = cs.get(m - 1) to cs.get(m - 1) + k - 1
+                    sum += ys.get(ord.get(j))
+                ct.set(m - 1, sum / k + (k - 1) * labelGap / 2)
+        for c = 0 to cs.size() - 1
+            for j = 0 to cn.get(c) - 1
+                lbs.get(ord.get(cs.get(c) + j)).set_y(ct.get(c) - j * labelGap)
+
+// Nearest active level on one side: "4201.9 · 15m · 13.1$"
+f_nearestText(array<Liq> arr) =>
+    string out = "—"
+    if arr.size() > 0
+        Liq first = arr.first()
+        array<Liq> grp = array.new<Liq>()
+        for x in arr
+            if not f_samePx(x.price, first.price)
+                break
+            grp.push(x)
+        out := str.tostring(first.price, "#.0") + " · " + f_kindsText(grp) + " · " + str.tostring(math.abs(first.price - close), "0.0") + "$"
+    out
+
+// Reading panel rows: name on the right; the value spans the two left columns.
+f_dashRow(table t, int row, string name, string val) =>
+    table.cell(t, 2, row, name, text_color = C_MUTED, text_size = SZ_DASH, text_halign = text.align_right)
+    table.cell(t, 0, row, val, text_color = chart.fg_color, text_size = SZ_DASH, text_halign = text.align_left)
+
+// Trend rows, as in picture 07: a coloured arrow, then the word in the text colour.
+f_dashTrend(table t, int row, string name, float ema) =>
+    bool has = not na(ema)
+    bool up  = has and close > ema
+    table.cell(t, 2, row, name, text_color = C_MUTED, text_size = SZ_DASH, text_halign = text.align_right)
+    table.cell(t, 0, row, has ? (up ? "▲" : "▼") : "—", text_color = has ? (up ? C_UP : C_DOWN) : C_MUTED, text_size = SZ_DASH, text_halign = text.align_left)
+    table.cell(t, 1, row, has ? (up ? "صاعد" : "هابط") : "", text_color = chart.fg_color, text_size = SZ_DASH, text_halign = text.align_left)
+
+// Status of the latest signal from its TP1 trade.
+f_status(Trade t) =>
+    na(t) ? "" : t.res1 == 0 ? " · مفتوحة" : t.res1 == 1 ? " · ✓ وصل الهدف" : t.res1 == -1 ? " · ✗ ضرب الستوب" : " · ⌛ انتهى الوقت"
+
+// One row of the statistics table, columns right to left: grade, count, TP1 win %, coin flip %,
+// difference, $ per trade, TP2 win %, coin flip %, $ per trade (spec 4.8).
+f_statRow(table t, int row, string name, Stat st) =>
+    float w1 = st.n1 > 0 ? 100.0 * st.w1 / st.n1 : na
+    float c1 = st.n1 > 0 ? 100.0 * st.c1 / st.n1 : na
+    float p1 = st.n1 > 0 ? st.p1 / st.n1 : na
+    float w2 = st.n2 > 0 ? 100.0 * st.w2 / st.n2 : na
+    float c2 = st.n2 > 0 ? 100.0 * st.c2 / st.n2 : na
+    float p2 = st.n2 > 0 ? st.p2 / st.n2 : na
+    float df = w1 - c1
+    color dc = na(df) ? C_MUTED : df > DIFF_GOOD and st.n1 >= N_GOOD ? C_GOOD : df < 0 ? C_BAD : C_MUTED
+    array<string> cells = array.from(f_sgn(p2, "0.00"), f_pct(c2), f_pct(w2), f_sgn(p1, "0.00"), f_sgn(df, "0.0"), f_pct(c1), f_pct(w1), str.tostring(st.n1), name)
+    for k = 0 to 8
+        table.cell(t, k, row, cells.get(k), text_color = k == 4 ? dc : chart.fg_color, text_size = SZ_STAT, text_halign = text.align_right)
+
+// One row of the results table, columns right to left: grade, trades still open, then for TP1 and
+// for TP2 the trades that reached the target (✓), hit the stop (✗), closed on the time stop (⌛) and
+// their net total in $ after costs, green when above zero and red when below.
+f_resRow(table t, int row, string name, Stat st, int open) =>
+    array<string> cells = array.from(f_usd(st.p2, st.n2), str.tostring(st.ts2), str.tostring(st.sl2), str.tostring(st.w2), f_usd(st.p1, st.n1), str.tostring(st.ts1), str.tostring(st.sl1), str.tostring(st.w1), str.tostring(open), name)
+    for k = 0 to 9
+        bool  usd = k == 0 or k == 4
+        float p   = k == 0 ? st.p2 : st.p1
+        int   n   = k == 0 ? st.n2 : st.n1
+        color c   = not usd ? chart.fg_color : n == 0 or p == 0 ? C_MUTED : p > 0 ? C_GOOD : C_BAD
+        table.cell(t, k, row, cells.get(k), text_color = c, bgcolor = usd and n > 0 and p != 0 ? color.new(c, 85) : na, text_size = SZ_RES, text_halign = k == 9 ? text.align_right : text.align_center)
+
+// ───── Data, read on every bar (spec 4.11 rule 2) ────────────────────────────────────────
+// Chart-TF swing confirmed at this bar's close (spec 2.1): the bar swingLen back is strictly
+// above the swingLen bars before it and >= the swingLen bars after it (mirror for lows).
+float hhC   = ta.highest(high, swingLen)
+float llC   = ta.lowest(low, swingLen)
+float pivHi = high[swingLen] > hhC[swingLen + 1] and high[swingLen] >= hhC ? high[swingLen] : na
+float pivLo = low[swingLen] < llC[swingLen + 1] and low[swingLen] <= llC ? low[swingLen] : na
+
+// The same swing rule on the higher timeframe, for the last CLOSED HTF bar, plus that bar's EMA for
+// the reading panel. Every value here is [1] or older, so lookahead_on only places it on the first
+// chart bar after that HTF bar closed (spec 4.3).
+f_htfSwing(int k, int emaLen) =>
+    float hh = ta.highest(high, k)
+    float ll = ta.lowest(low, k)
+    float ph = high[k + 1] > hh[k + 2] and high[k + 1] >= hh[1] ? high[k + 1] : na
+    float pl = low[k + 1] < ll[k + 2] and low[k + 1] <= ll[1] ? low[k + 1] : na
+    [ph, pl, time[k + 1], ta.ema(close, emaLen)[1]]
+
+[h1Hi, h1Lo, h1T, ema1H] = request.security(syminfo.tickerid, "60", f_htfSwing(htfLen, EMA_1H), lookahead = barmerge.lookahead_on)
+[h4Hi, h4Lo, h4T, ema4H] = request.security(syminfo.tickerid, "240", f_htfSwing(htfLen, EMA_4H), lookahead = barmerge.lookahead_on)
+[pdHi, pdLo, pdT, emaD]  = request.security(syminfo.tickerid, "D", [high[1], low[1], time[1], ta.ema(close, EMA_D)[1]], lookahead = barmerge.lookahead_on)
+[pwHi, pwLo, pwT]        = request.security(syminfo.tickerid, "W", [high[1], low[1], time[1]], lookahead = barmerge.lookahead_on)
+// Trend for the grade (spec 2.6): EMA of closed trendTF bars, known before this bar opened.
+float emaTrend = request.security(syminfo.tickerid, trendTF, ta.ema(close, trendLen)[1], lookahead = barmerge.lookahead_on)
+float atrNow   = ta.atr(ATR_LEN)
+
+bool newH1     = nz(ta.change(time("60"))) != 0
+bool newH4     = nz(ta.change(time("240"))) != 0
+bool newDay    = nz(ta.change(time("D"))) != 0      // the trading day rolls at 17:00 New York
+bool newWeek   = nz(ta.change(time("W"))) != 0
+int  dayEnd    = time_close("D")
+int  weekEnd   = time_close("W")
+bool inAsia    = not na(time(timeframe.period, asiaSess, "UTC"))
+bool wasAsia   = inAsia[1]
+bool chartLt1H = timeframe.in_seconds() < 3600     // as in the reference: 1H swings only below 1H
+bool firedA    = false                              // this bar closed with an A signal (alertcondition)
+bool firedAB   = false                              // ... with an A or B signal
+
+// ───── Engine: one pass per confirmed bar, in the reference's order (spec 4.4) ───────────
+if barstate.isconfirmed
+    // 1. Levels available at this bar's open. Side check against the previous close.
+    bool calAdded = false
+    if useP1H and chartLt1H and newH1
+        if not na(h1Hi) and h1Hi > close[1]
+            f_addLevel(Liq.new(h1Hi, 1, "P1H", h1T, na))
+        if not na(h1Lo) and h1Lo < close[1]
+            f_addLevel(Liq.new(h1Lo, -1, "P1H", h1T, na))
+    if useP4H and newH4
+        if not na(h4Hi) and h4Hi > close[1]
+            f_addLevel(Liq.new(h4Hi, 1, "P4H", h4T, na))
+        if not na(h4Lo) and h4Lo < close[1]
+            f_addLevel(Liq.new(h4Lo, -1, "P4H", h4T, na))
+    if usePD and newDay
+        if not na(pdHi) and pdHi > close[1]
+            f_addLevel(Liq.new(pdHi, 1, "PD", pdT, dayEnd))
+            calAdded := true
+        if not na(pdLo) and pdLo < close[1]
+            f_addLevel(Liq.new(pdLo, -1, "PD", pdT, dayEnd))
+            calAdded := true
+    if usePW and newWeek
+        if not na(pwHi) and pwHi > close[1]
+            f_addLevel(Liq.new(pwHi, 1, "PW", pwT, weekEnd))
+            calAdded := true
+        if not na(pwLo) and pwLo < close[1]
+            f_addLevel(Liq.new(pwLo, -1, "PW", pwT, weekEnd))
+            calAdded := true
+    if useAsia and wasAsia and not inAsia and not na(asiaHi)
+        if asiaHi > close[1]
+            f_addLevel(Liq.new(asiaHi, 1, "ASIA", asiaT, dayEnd))
+            calAdded := true
+        if asiaLo < close[1]
+            f_addLevel(Liq.new(asiaLo, -1, "ASIA", asiaT, dayEnd))
+            calAdded := true
+    if calAdded
+        nextExp := f_minExpiry()
+
+    // 2. Day / week / Asia levels whose life is over. Their line ends on the previous bar.
+    if not na(nextExp) and time >= nextExp
+        array<Liq> gone = array.new<Liq>()
+        f_expire(above, gone)
+        f_expire(below, gone)
+        f_drawEnded(gone, time[1], 0)
+        nextExp := f_minExpiry()
+
+    // 3. Candle sweeps (C) from breaks on earlier bars: this close is back inside the nearest
+    //    level the break crossed, within candleBars bars. The extreme runs from the break bar to here.
+    Sig sigUp = na
+    Sig sigDn = na
+    if pending.size() > 0
+        for i = pending.size() - 1 to 0
+            Pend p = pending.get(i)
+            p.ext := p.side == 1 ? math.max(p.ext, high) : math.min(p.ext, low)
+            if (p.side == 1 ? close < p.ref : close > p.ref)
+                f_markSwept(p.levels)
+                if useC and p.side == 1
+                    sigUp := f_addSig(sigUp, 1, "C", p.levels, p.ext, p.ref)
+                if useC and p.side == -1
+                    sigDn := f_addSig(sigDn, -1, "C", p.levels, p.ext, p.ref)
+                pending.remove(i)
+            else if bar_index - p.barIdx >= candleBars
+                pending.remove(i)
+
+    // 4. Levels taken by this bar (spec 2.2): wick sweeps now, breaks wait for step 3.
+    array<Liq> takenUp = array.new<Liq>()
+    array<Liq> takenDn = array.new<Liq>()
+    f_take(above, takenUp)
+    f_take(below, takenDn)
+    Sig wUp = f_takeSide(takenUp, 1)
+    Sig wDn = f_takeSide(takenDn, -1)
+    if not na(wUp)
+        sigUp := f_addSig(sigUp, 1, "W", wUp.levels, wUp.ext, wUp.ref)
+    if not na(wDn)
+        sigDn := f_addSig(sigDn, -1, "W", wDn.levels, wDn.ext, wDn.ref)
+
+    // 5. Virtual trades opened on earlier bars: one more bar for each target still open. This comes
+    //    before the bar's signal, so with oneTrade a trade that ends on this bar leaves the way free
+    //    for a signal at this close. A trade opened at this close is first checked on the next bar.
+    if openTr.size() > 0
+        for i = openTr.size() - 1 to 0
+            Trade tr = openTr.get(i)
+            if tr.barIdx < bar_index
+                int barsIn = bar_index - tr.barIdx
+                if tr.res1 == 0
+                    [r1, px1] = f_legStep(tr.dir, tr.sl, tr.tp1, barsIn)
+                    if r1 != 0
+                        tr.res1  := r1
+                        tr.exit1 := bar_index
+                        if tr.inStats
+                            f_addLeg(stAll, 1, r1, tr.coin1, tr.dir * (px1 - tr.entry) - cost)
+                            f_addLeg(f_statOf(tr.grade), 1, r1, tr.coin1, tr.dir * (px1 - tr.entry) - cost)
+                        f_drawMark(tr)
+                if tr.res2 == 0
+                    [r2, px2] = f_legStep(tr.dir, tr.sl, tr.tp2, barsIn)
+                    if r2 != 0
+                        tr.res2  := r2
+                        tr.exit2 := bar_index
+                        if tr.inStats
+                            f_addLeg(stAll, 2, r2, tr.coin2, tr.dir * (px2 - tr.entry) - cost)
+                            f_addLeg(f_statOf(tr.grade), 2, r2, tr.coin2, tr.dir * (px2 - tr.entry) - cost)
+                if tr.res1 != 0 and tr.res2 != 0
+                    openTr.remove(i)
+
+    // 6. One signal per bar, at this close. A bar that sweeps both sides is ambiguous: no signal,
+    //    though its levels are still used up. Grade it, draw it, open its virtual trade (spec 2.4):
+    //    entry at this close, stop stopBuf beyond the sweep extreme but never closer to the entry
+    //    than minStop, two targets. Then the alert: once, at this close (spec 4.10).
+    //    With oneTrade the signal is traded only if no virtual trade is open and it is on the chart
+    //    (not a hidden AVOID); if not, it is drawn grey and left out of the stats and the alerts.
+    if na(sigUp) != na(sigDn)
+        Sig s = na(sigUp) ? sigDn : sigUp
+        f_grade(s, emaTrend)
+        int   d     = -s.side
+        float S     = math.max(math.abs(s.ext - close) + stopBuf, minStop)
+        float T1    = targetMode == "$" ? tp1 : tp1Atr * atrNow[1]
+        float T2    = targetMode == "$" ? tp2 : tp2Atr * atrNow[1]
+        bool  taken = not oneTrade or (openTr.size() == 0 and (showAvoid or s.grade != "AVOID"))
+        Trade t     = Trade.new(d, s.grade, bar_index, close, close - d * S, close + d * T1, close + d * T2, S / (S + T1), S / (S + T2), time >= statsFrom and time < statsTo)
+        t.lb       := f_drawSignal(s, t, taken)
+        if taken
+            lastSig := (s.side == 1 ? "بيع" : "شراء") + " · " + s.typ + " · " + s.grade
+            openTr.push(t)
+            lastT := t
+            if showAvoid or s.grade != "AVOID"
+                planT := t
+            firedA  := s.grade == "A"
+            firedAB := s.grade == "A" or s.grade == "B"
+            if f_alertOk(s.grade)
+                alert(f_alertText(s, t), alert.freq_once_per_bar_close)
+
+    // The part of the stats window the chart covers, for the table's footer.
+    if time >= statsFrom and time < statsTo
+        winBars += 1
+        winFrom := na(winFrom) ? time : winFrom
+        winTo   := time
+
+    // Asia range on chart bars: restarts on the first bar of the session.
+    if inAsia
+        asiaHi := wasAsia ? math.max(asiaHi, high) : high
+        asiaLo := wasAsia ? math.min(asiaLo, low) : low
+        asiaT  := wasAsia ? asiaT : time
+
+    // 7. Chart-TF swings confirmed at this close. Side check against this close.
+    if useP
+        if not na(pivHi) and pivHi > close
+            f_addLevel(Liq.new(pivHi, 1, "P", time[swingLen], na))
+        if not na(pivLo) and pivLo < close
+            f_addLevel(Liq.new(pivLo, -1, "P", time[swingLen], na))
+
+// Fixed alert conditions (spec 4.10), for alerts set with "Once Per Bar Close".
+alertcondition(firedA, "GLM: any A sweep", "GLM: A sweep on {{ticker}} {{interval}}, close {{close}}")
+alertcondition(firedAB, "GLM: any A or B sweep", "GLM: A or B sweep on {{ticker}} {{interval}}, close {{close}}")
+
+// ───── Display: reads the engine's state, never changes it ───────────────────────────────
+var table dash  = showDash ? table.new(f_pos(dashPos), 3, 9, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
+var table stTbl = showStats ? table.new(f_pos(statPos), 9, 7, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
+var table rsTbl = showResults ? table.new(f_pos(resPos), 10, 8, bgcolor = color.new(chart.bg_color, 8), frame_color = color.new(chart.fg_color, 80), frame_width = 1, border_width = 0) : na
+
+if barstate.isfirst
+    if drawNearest > 0
+        for k = 1 to drawNearest
+            poolLnUp.push(line.new(time, close, time, close, xloc = xloc.bar_time, color = na, width = 1))
+            poolLnDn.push(line.new(time, close, time, close, xloc = xloc.bar_time, color = na, width = 1))
+            poolLbUp.push(label.new(bar_index, close, "", color = na, style = label.style_label_left, textcolor = na, size = size.small))
+            poolLbDn.push(label.new(bar_index, close, "", color = na, style = label.style_label_left, textcolor = na, size = size.small))
+    if showPlan
+        for k = 1 to PLAN_LINES
+            planLn.push(line.new(bar_index, close, bar_index, close, color = na, width = 1))
+            planLb.push(label.new(bar_index, close, "", color = na, style = label.style_label_left, textcolor = na, size = size.small))
+        planBx.push(box.new(bar_index, close, bar_index, close, border_color = na, bgcolor = na))
+        planBx.push(box.new(bar_index, close, bar_index, close, border_color = na, bgcolor = na))
+    if not na(dash)
+        table.merge_cells(dash, 0, 0, 2, 0)            // title across the panel
+        for r = 4 to 8
+            table.merge_cells(dash, 0, r, 1, r)        // rows without an arrow
+    if not na(stTbl)
+        table.merge_cells(stTbl, 0, 0, 8, 0)           // title
+        table.merge_cells(stTbl, 0, 6, 4, 6)           // footer, left: legend
+        table.merge_cells(stTbl, 5, 6, 8, 6)           // footer, right: dates and bars
+    if not na(rsTbl)
+        table.merge_cells(rsTbl, 0, 0, 9, 0)           // title
+        table.merge_cells(rsTbl, 4, 1, 7, 1)           // TP1 over its four columns
+        table.merge_cells(rsTbl, 0, 1, 3, 1)           // TP2 over its four columns
+        table.merge_cells(rsTbl, 9, 1, 9, 2)           // grade over both header rows
+        table.merge_cells(rsTbl, 8, 1, 8, 2)           // open trades over both header rows
+        table.merge_cells(rsTbl, 0, 7, 9, 7)           // footer
+
+if barstate.islast
+    f_drawPool(showLevels ? above : array.new<Liq>(), poolLnUp, poolLbUp)
+    f_drawPool(showLevels ? below : array.new<Liq>(), poolLnDn, poolLbDn)
+    f_drawPlan(planT)
+    f_spreadLabels()
+    if not na(dash)
+        table.cell(dash, 0, 0, "GLM · لوحة القراءة", text_color = chart.fg_color, text_size = SZ_DASH, text_halign = text.align_right)
+        f_dashTrend(dash, 1, "ترند الساعة", ema1H)
+        f_dashTrend(dash, 2, "ترند 4 ساعات", ema4H)
+        f_dashTrend(dash, 3, "الترند اليومي", emaD)
+        f_dashRow(dash, 4, "الجلسة", f_sessionAr(f_session(time)))
+        f_dashRow(dash, 5, "ATR(" + str.tostring(ATR_LEN) + ")", str.tostring(atrNow, "0.0") + "$")
+        f_dashRow(dash, 6, "أقرب سيولة فوق", f_nearestText(above))
+        f_dashRow(dash, 7, "أقرب سيولة تحت", f_nearestText(below))
+        f_dashRow(dash, 8, "آخر إشارة", lastSig + f_status(lastT))
+    string t1Txt = targetMode == "$" ? str.tostring(tp1, "#.##") + "$" : str.tostring(tp1Atr, "#.##") + "×ATR"
+    string t2Txt = targetMode == "$" ? str.tostring(tp2, "#.##") + "$" : str.tostring(tp2Atr, "#.##") + "×ATR"
+    if not na(stTbl)
+        array<string> head = array.from("$/صفقة", "الصدفة", "ربح " + t2Txt, "$/صفقة", "الفرق", "الصدفة", "ربح " + t1Txt, "العدد", "التصنيف")
+        table.cell(stTbl, 0, 0, "جدول الإحصاءات الحي", text_color = chart.fg_color, text_size = SZ_STAT, text_halign = text.align_right)
+        for k = 0 to 8
+            table.cell(stTbl, k, 1, head.get(k), text_color = C_MUTED, text_size = SZ_STATH, text_halign = text.align_right)
+        f_statRow(stTbl, 2, "الكل", stAll)
+        f_statRow(stTbl, 3, "A", stA)
+        f_statRow(stTbl, 4, "B", stB)
+        f_statRow(stTbl, 5, "AVOID", stAvoid)
+        table.cell(stTbl, 0, 6, "الصدفة = نسبة رمي العملة · الفرق ≤ 0 يعني لا ميزة", text_color = C_MUTED, text_size = SZ_STATH, text_halign = text.align_left)
+        table.cell(stTbl, 5, 6, f_date(winFrom) + " → " + f_date(winTo) + " · " + str.tostring(winBars) + " شمعة" + (oneTrade ? " · صفقة وحدة بالمرة" : ""), text_color = C_MUTED, text_size = SZ_STATH, text_halign = text.align_right)
+    if not na(rsTbl)
+        // Trades still running per row (all, A, B, AVOID), drawn on the chart or not.
+        array<int> openN = array.new<int>(4, 0)
+        for tr in openTr
+            if tr.inStats
+                int gi = tr.grade == "A" ? 1 : tr.grade == "B" ? 2 : 3
+                openN.set(0, openN.get(0) + 1)
+                openN.set(gi, openN.get(gi) + 1)
+        table.cell(rsTbl, 0, 0, "نتائج الصفقات", text_color = chart.fg_color, text_size = SZ_RES, text_halign = text.align_right)
+        table.cell(rsTbl, 9, 1, "التصنيف", text_color = C_MUTED, text_size = SZ_RESH, text_halign = text.align_right)
+        table.cell(rsTbl, 8, 1, "مفتوحة", text_color = C_MUTED, text_size = SZ_RESH, text_halign = text.align_center)
+        table.cell(rsTbl, 4, 1, "هدف " + t1Txt, text_color = C_MUTED, text_size = SZ_RESH, text_halign = text.align_center)
+        table.cell(rsTbl, 0, 1, "هدف " + t2Txt, text_color = C_MUTED, text_size = SZ_RESH, text_halign = text.align_center)
+        for g = 0 to 1
+            int k0 = 4 * g
+            table.cell(rsTbl, k0 + 3, 2, "✓ هدف", text_color = C_GOOD, text_size = SZ_RESH, text_halign = text.align_center)
+            table.cell(rsTbl, k0 + 2, 2, "✗ ستوب", text_color = C_BAD, text_size = SZ_RESH, text_halign = text.align_center)
+            table.cell(rsTbl, k0 + 1, 2, "⌛ وقت", text_color = C_MUTED, text_size = SZ_RESH, text_halign = text.align_center)
+            table.cell(rsTbl, k0, 2, "المجموع $", text_color = C_MUTED, text_size = SZ_RESH, text_halign = text.align_center)
+        f_resRow(rsTbl, 3, "الكل", stAll, openN.get(0))
+        f_resRow(rsTbl, 4, "A", stA, openN.get(1))
+        f_resRow(rsTbl, 5, "B", stB, openN.get(2))
+        f_resRow(rsTbl, 6, "AVOID", stAvoid, openN.get(3))
+        table.cell(rsTbl, 0, 7, "المجموع بالدولار لأونصة وحدة (0.01 لوت)، بعد تكلفة " + str.tostring(cost, "#.##") + "$ للصفقة" + (oneTrade ? " · صفقة وحدة بالمرة" : ""), text_color = C_MUTED, text_size = SZ_RESH, text_halign = text.align_right)
