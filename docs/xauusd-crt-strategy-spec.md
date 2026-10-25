@@ -2,6 +2,20 @@
 
 > **طريقة الاستخدام:** انسخ هذا الملف كاملاً وأعطه لـ Claude Opus.
 > القسم 11 هو الطلب الموجّه له مباشرة، وبقية الأقسام هي المواصفات التي يبني عليها.
+>
+> **الصور التوضيحية** موجودة في مجلد [`img/`](img/) ومدمجة في الأقسام المناسبة. الأسعار فيها افتراضية.
+> كل علامة في الصور (السحب، الفجوة، الدخول، الوقف، الهدف، الإلغاء) محسوبة آلياً بالدالة `simulate` في
+> [`img/generate_diagrams.py`](img/generate_diagrams.py)، وهي تطبيق مرجعي بلغة Python للقسمين 5 و6.
+> إذا اختلفت الصورة عن النص، فالنص هو المرجع.
+
+| الصورة | المحتوى |
+|---|---|
+| [`01-daily-timeline.png`](img/01-daily-timeline.png) | الجدول الزمني لليوم بتوقيت نيويورك |
+| [`02-long-example.png`](img/02-long-example.png) | مثال شراء كامل خطوة بخطوة |
+| [`03-short-example.png`](img/03-short-example.png) | مثال بيع (مرآة للشراء) |
+| [`04-fvg-definition.png`](img/04-fvg-definition.png) | تعريف الـFVG الصاعدة والهابطة، ومثال ليس FVG |
+| [`05-entry-modes.png`](img/05-entry-modes.png) | طرق الدخول الثلاث وإلغاء الفجوة |
+| [`06-edge-cases.png`](img/06-edge-cases.png) | حالات الإلغاء والخروج الخاصة |
 
 ---
 
@@ -53,6 +67,16 @@
 | الوقف | تحت الحافة السفلية للـFVG | فوق الحافة العلوية للـFVG |
 | الهدف | خط **High** | خط **Low** |
 
+### مثال شراء كامل
+الشمعة المرجعية 08:00–09:00، ثم سحب للـLow عند 09:30، ثم فجوة صاعدة عند 09:50، ثم دخول عند إعادة الاختبار 10:10، ثم وصول الهدف عند 10:45.
+
+![مثال شراء](img/02-long-example.png)
+
+### مثال بيع (مرآة)
+نفس المثال مقلوباً: سحب للـHigh، ثم فجوة هابطة، ثم بيع عند إعادة الاختبار، والهدف هو الـLow.
+
+![مثال بيع](img/03-short-example.png)
+
 ---
 
 ## 3. المنصة والفريم
@@ -66,6 +90,8 @@
 ---
 
 ## 4. الإعدادات (Inputs)
+
+![الجدول الزمني لليوم](img/01-daily-timeline.png)
 
 ### الجلسة والنطاق
 | الإعداد | الافتراضي | الوصف |
@@ -142,6 +168,8 @@
 
 يُستخدم **أول** فجوة تحقق هذه الشروط بعد السحب.
 
+![تعريف الـFVG](img/04-fvg-definition.png)
+
 ### 5.4 الدخول (Retest)
 يبدأ البحث من الشمعة التي تلي شمعة الفجوة `i`، **ولا تُحسب شمعة الفجوة نفسها**. الوصف هنا للشراء، والبيع عكسه:
 
@@ -153,6 +181,8 @@
 
 - في وضع `"Close"`: إذا لمست الشمعة الفجوة لكنها أغلقت تحت `fvgBot`، **تُلغى الفجوة** ونعود لانتظار فجوة جديدة (حالة `WAIT_FVG`).
 - إذا وصل السعر إلى الهدف قبل الدخول (`high >= rangeHigh` للشراء)، يُلغى الإعداد. هذه الحركة هي سحب للطرف الآخر، فيمكن أن يبدأ منها إعداد بيع إذا كان `allowShort` مفعّلاً ولم يُستنفد عدد الصفقات.
+
+![طرق الدخول](img/05-entry-modes.png)
 
 ### 5.5 الوقف والهدف (للشراء، والبيع عكسه)
 - `"Beyond FVG"`: `SL = fvgBot − slBufferATR × ATR(14)`.
@@ -166,13 +196,32 @@
 - **الربح:** `high >= TP` للشراء، وتُحسب `+RR`.
 - إذا تحقق الوقف والهدف في الشمعة نفسها، **يُحسب الوقف أولاً** (افتراض متحفظ).
 - في شمعة الدخول نفسها **يُفحص الوقف فقط**، لأننا لا نعرف هل وصل السعر إلى الـhigh قبل الدخول أم بعده.
-- **الخروج بالوقت:** إذا وصل الوقت إلى `forceExitTime` والصفقة مفتوحة، تُغلق على سعر `close`، والنتيجة `R = (close − entry) / (entry − SL)`.
+- **الخروج بالوقت:** الصفقة المفتوحة تُغلق على سعر `close` للشمعة التي **ينتهي** وقتها عند `forceExitTime` أو بعده (`time_close >= forceExitTime`). على فريم 5 دقائق هذه شمعة 15:55، فيكون الخروج عند 16:00 تماماً. النتيجة `R = (close − entry) / (entry − SL)`.
+
+![حالات الإلغاء والخروج](img/06-edge-cases.png)
 
 ---
 
 ## 6. منطق المؤشر خطوة بخطوة (State Machine)
 
 كل المنطق يعمل على الشموع المؤكدة فقط (`barstate.isconfirmed`).
+
+```mermaid
+stateDiagram-v2
+    [*] --> WAIT_RANGE
+    WAIT_RANGE --> BUILD_RANGE: bar at refHour:00
+    BUILD_RANGE --> WAIT_SWEEP: t >= refStart + 60m (range ready)
+    WAIT_SWEEP --> WAIT_FVG: low < rangeLow (LONG) / high > rangeHigh (SHORT)
+    WAIT_SWEEP --> DONE: both sides in one bar / t >= tradeWindowEnd
+    WAIT_FVG --> WAIT_FVG: new extreme updates sweepExt / opposite level broken flips dir
+    WAIT_FVG --> WAIT_ENTRY: valid FVG (5.3)
+    WAIT_FVG --> DONE: real breakout (sweepMaxATR) / t >= tradeWindowEnd
+    WAIT_ENTRY --> IN_TRADE: retest per entryMode (5.4)
+    WAIT_ENTRY --> WAIT_FVG: Close mode invalidation / target reached first flips dir
+    WAIT_ENTRY --> DONE: RR < minRR / t >= tradeWindowEnd
+    IN_TRADE --> WAIT_SWEEP: trade closed, tradesToday < max, t < tradeWindowEnd
+    IN_TRADE --> DONE: SL / TP / time exit
+```
 
 ```text
 الحالات: WAIT_RANGE → BUILD_RANGE → WAIT_SWEEP → WAIT_FVG → WAIT_ENTRY → IN_TRADE → DONE
@@ -221,7 +270,7 @@
 
   # 5) انتظار إعادة الاختبار (هنا للشراء)
   elif state == WAIT_ENTRY and dir == LONG and bar_index > fvgBar + 2:
-      if high >= rangeHigh: الإعداد يُلغى (الهدف تحقق بدون دخول). إذا كان البيع مسموحاً: dir = SHORT ; sweepExt = high ; state = WAIT_FVG
+      if high >= rangeHigh: الإعداد يُلغى (الهدف تحقق بدون دخول). إذا كان البيع مسموحاً: dir = SHORT ; sweepExt = high ; sweepExtBar = bar_index ; state = WAIT_FVG
       elif تحقق شرط الدخول حسب entryMode:
           احسب entry و SL و TP و RR (القسم 5.5)
           if RR <= 0 or RR < minRR: state = DONE (skipped)
@@ -236,7 +285,7 @@
   elif state == IN_TRADE:
       if low <= SL:            سجّل خسارة (-1R)
       elif high >= TP:         سجّل ربحاً (+RR)
-      elif t >= forceExitTime: أغلق على close وسجّل R الفعلي
+      elif time_close >= forceExitTime: أغلق على close وسجّل R الفعلي
       عند انتهاء الصفقة:
           if tradesToday < maxTradesPerDay and t < tradeWindowEnd: state = WAIT_SWEEP
           else: state = DONE
@@ -302,6 +351,7 @@
 7. الأيام التي لا تحتوي بيانات (عطلات أو بيانات ناقصة) لا تسبب أخطاء.
 8. أرقام جدول الإحصاءات تطابق العلامات المرسومة على الشارت.
 9. لا يتجاوز المؤشر حدود الرسم في Pine عند فتح تاريخ طويل.
+10. سلوك المؤشر يطابق الحالات المرسومة في الصور 02 إلى 06: النتيجة نفسها لكل حالة (دخول، أو إلغاء، أو SL، أو TP، أو خروج بالوقت).
 
 ---
 
@@ -311,6 +361,9 @@
 أنت مطوّر محترف في Pine Script v6 على TradingView.
 ابنِ مؤشراً (indicator, overlay=true) للذهب XAUUSD ينفّذ استراتيجية CRT الموصوفة
 في هذا الملف بالكامل، ملتزماً بالأقسام 4 إلى 8 كما هي.
+افتح كل الصور في docs/img/ وادرسها قبل الكتابة، فهي أمثلة محلولة للقواعد.
+والدالة simulate في docs/img/generate_diagrams.py تطبيق مرجعي بلغة Python لنفس المنطق،
+استخدمها لفهم ترتيب الفحوصات داخل كل شمعة.
 
 المطلوب:
 1. كود Pine Script v6 كامل في ملف واحد، منظّم في أقسام بتعليقات واضحة:
